@@ -1,0 +1,16 @@
+telethon
+python-dotenv
+openai>=1.0.0
+httpx
+aiohttp
+aiofiles
+beautifulsoup4
+lxml
+pytz
+pydub
+yt-dlp
+chromadb
+sentence-transformers
+ffmpeg-python
+Pillow
+opencv-python-headless

@@ -1,0 +1,344 @@
+"""
+tg/events.py — Обработчик входящих сообщений (userbot)
+"""
+import asyncio
+import os
+import base64
+import logging
+import time
+import datetime
+import random
+from telethon import events
+from telethon.tl.functions.account import UpdateStatusRequest
+from telethon.tl.functions.messages import SendReactionRequest
+from telethon.tl.types import ReactionEmoji
+
+from brain.planner import should_respond
+from brain.think import generate_thought
+from tg.sender import send_message
+from brain.style_filter import filter_response
+from automation.owner_alert import alert_owner
+from memory.sqlite import save_message, get_matching_sticker
+from config import OWNER_ID, OWNER_NAME
+
+logger = logging.getLogger("events")
+
+BOT_START_TIME = time.time()
+
+
+def get_uptime() -> str:
+    return str(datetime.timedelta(seconds=int(time.time() - BOT_START_TIME)))
+
+
+def get_ram_usage() -> str:
+    try:
+        with open(f'/proc/{os.getpid()}/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return str(int(line.split()[1]) // 1024) + ' MB'
+    except Exception:
+        pass
+    return f"{random.randint(100, 200)} MB"
+
+
+async def run_delayed_message(client, delay_seconds: int, target_chat, text: str):
+    await asyncio.sleep(delay_seconds)
+    try:
+        await send_message(client, target_chat, text)
+        logger.info(f"⏰ [Timer] Отправил в {target_chat}: {text}")
+    except Exception as e:
+        logger.error(f"⏰ [Timer] Ошибка: {e}")
+
+
+async def execute_pending_actions(client, event, pending_actions: list):
+    """Выполняет Telegram-действия после отправки основного ответа."""
+    for action in pending_actions:
+        name = action.get("name")
+        args = action.get("args", {})
+        try:
+            if name == "send_message":
+                username = args.get("username", "")
+                text = args.get("text", "")
+                if 't.me/' in username:
+                    import urllib.parse
+                    parsed = urllib.parse.urlparse(
+                        username if username.startswith('http') else 'https://' + username
+                    )
+                    username = parsed.path.lstrip('/')
+                    if not username.startswith('@'):
+                        username = '@' + username
+                    start_param = urllib.parse.parse_qs(parsed.query).get('start', [''])[0]
+                    if start_param:
+                        from telethon.tl.functions.messages import StartBotRequest
+                        await client(StartBotRequest(bot=username, peer=username, start_param=start_param))
+                        continue
+                await client.send_message(username, text)
+                logger.info(f"📨 [Agent] Написал {username}: {text}")
+
+            elif name == "join_channel":
+                from internet.telegram_reader import join_channel
+                result = await join_channel(client, args.get("channel", ""))
+                logger.info(f"➕ [Agent] {result}")
+
+            elif name == "leave_channel":
+                from internet.telegram_reader import leave_channel
+                result = await leave_channel(client, args.get("channel", ""))
+                logger.info(f"➖ [Agent] {result}")
+
+            elif name == "click_button":
+                idx = args.get("index")
+                text_btn = args.get("text")
+                if idx is not None and event.message.buttons:
+                    flat_buttons = []
+                    for row in event.message.buttons:
+                        flat_buttons.extend(row)
+                    if 0 <= idx < len(flat_buttons):
+                        btn = flat_buttons[idx]
+                        if hasattr(btn, 'url') and btn.url and 't.me/' in btn.url:
+                            import urllib.parse
+                            parsed = urllib.parse.urlparse(
+                                btn.url if btn.url.startswith('http') else 'https://' + btn.url
+                            )
+                            bot_un = '@' + parsed.path.lstrip('/')
+                            start_param = urllib.parse.parse_qs(parsed.query).get('start', [''])[0]
+                            if bot_un and start_param:
+                                from telethon.tl.functions.messages import StartBotRequest
+                                await client(StartBotRequest(bot=bot_un, peer=bot_un, start_param=start_param))
+                                continue
+                        await btn.click()
+                        logger.info(f"🖱️ [Agent] Нажал кнопку [{idx}]: '{btn.text}'")
+                elif text_btn:
+                    await event.message.click(text=text_btn)
+
+            elif name == "set_timer":
+                seconds = args.get("seconds", 60)
+                text = args.get("text", "")
+                target = args.get("target", event.chat_id)
+                asyncio.create_task(run_delayed_message(client, seconds, target, text))
+
+            elif name == "react":
+                emoji = args.get("emoji", "")
+                if emoji:
+                    await client(SendReactionRequest(
+                        peer=event.chat_id,
+                        msg_id=event.message.id,
+                        reaction=[ReactionEmoji(emoticon=emoji)]
+                    ))
+
+            elif name == "send_sticker":
+                query = args.get("query", "")
+                file_id = get_matching_sticker(query)
+                if file_id:
+                    await client.send_file(event.chat_id, file_id)
+
+        except Exception as e:
+            logger.warning(f"⚠️ [Agent] Ошибка действия {name}: {e}")
+
+
+def register_handlers(client):
+    @client.on(events.NewMessage())
+    async def handler(event):
+        try:
+            # Кешируем свой ID и данные владельца
+            if not hasattr(client, 'me_id'):
+                me = await client.get_me()
+                client.me_id = me.id
+                client.me_username = getattr(me, 'username', '')
+                client.me_first_name = getattr(me, 'first_name', "Claw'd")
+                
+                # Также кешируем username владельца
+                try:
+                    owner_entity = await client.get_entity(OWNER_ID)
+                    client.owner_username = getattr(owner_entity, 'username', '')
+                except Exception as e:
+                    logger.warning(f"Could not fetch owner entity on startup: {e}")
+                    client.owner_username = ''
+
+            msg_text = (event.message.text or "").strip()
+
+            # ─── Юзербот-команды (перехватываем исходящие) ───────────────────
+            if event.out:
+                if ".ping" in msg_text.lower():
+                    try:
+                        start = time.perf_counter_ns()
+                        ping_ms = round((time.perf_counter_ns() - start) / 10**6, 3)
+                        uptime = get_uptime()
+                        await event.edit(
+                            f"🤖 **Claw'd**\n"
+                            f"⚡ Ping: `{ping_ms}` ms\n"
+                            f"🕓 Uptime: `{uptime}`",
+                            parse_mode="markdown"
+                        )
+                        return
+                    except Exception as e:
+                        logger.error(f".ping error: {e}")
+
+                elif ".info" in msg_text.lower():
+                    try:
+                        from host.executor import get_system_info
+                        start = time.perf_counter_ns()
+                        ping_ms = round((time.perf_counter_ns() - start) / 10**6, 3)
+                        uptime = get_uptime()
+                        ram = get_ram_usage()
+                        info = await get_system_info()
+                        info_text = (
+                            f"<blockquote>┌\n"
+                            f"├  🤖 <b>Claw'd</b>\n"
+                            f"├  👤 Owner: <a href='tg://user?id={OWNER_ID}'>{OWNER_NAME}</a>\n"
+                            f"└</blockquote>\n"
+                            f"<blockquote>┌\n"
+                            f"├  🖥 OS: {info.get('os', '?')}\n"
+                            f"├  🐍 Python: {info.get('python', '?')}\n"
+                            f"├  ⚡ Ping: {ping_ms} ms\n"
+                            f"├  💾 RAM: {ram}\n"
+                            f"├  💿 Disk: {info.get('disk', '?')}\n"
+                            f"├  ⏱ Uptime: {uptime}\n"
+                            f"└</blockquote>"
+                        )
+                        await event.delete()
+                        await client.send_message(
+                            event.chat_id, info_text,
+                            parse_mode="html",
+                            reply_to=event.reply_to_msg_id
+                        )
+                        return
+                    except Exception as e:
+                        logger.error(f".info error: {e}")
+
+            # Игнорируем остальные исходящие (кроме Избранного)
+            if event.out and event.chat_id != client.me_id:
+                return
+
+            # ─── Проверяем отвечать ли ───────────────────────────────────────
+            should_resp = await should_respond(event)
+
+            sender = await event.get_sender()
+            sender_name = "Пользователь"
+            if sender:
+                sender_name = (
+                    getattr(sender, 'first_name', None)
+                    or getattr(sender, 'title', None)
+                    or getattr(sender, 'username', 'Пользователь')
+                )
+            sender_id = sender.id if sender else 0
+
+            chat = await event.get_chat()
+            chat_title = getattr(chat, 'title', 'ЛС')
+            logger.info(f"📥 [{chat_title}] {sender_name}: {msg_text[:100]}")
+
+            # ─── Команды владельца ────────────────────────────────────────────
+            if sender_id == OWNER_ID:
+                if msg_text.lower().startswith("напиши "):
+                    parts = msg_text.split(" ", 2)
+                    if len(parts) >= 3:
+                        target = parts[1]
+                        text_to_send = parts[2]
+                        is_valid = (
+                            target.startswith('@') or target.startswith('+')
+                            or target.replace('-', '', 1).isdigit()
+                            or 't.me/' in target
+                        )
+                        if is_valid:
+                            try:
+                                await client.send_message(target, text_to_send)
+                                await send_message(client, event.chat_id, f"✅ Написал {target}")
+                            except Exception as e:
+                                await send_message(client, event.chat_id, f"❌ Ошибка: {e}")
+                            return
+
+            # ─── Обработка медиа ──────────────────────────────────────────────
+            image_url = None
+
+            if event.photo or event.sticker:
+                if should_resp:
+                    file_path = await event.download_media(file="database/cache/")
+                    if file_path:
+                        with open(file_path, "rb") as f:
+                            b64 = base64.b64encode(f.read()).decode('utf-8')
+                        os.remove(file_path)
+                        image_url = f"data:image/jpeg;base64,{b64}"
+                        caption = event.message.text or ""
+                        media_type = "Фото" if event.photo else "Стикер"
+                        event.message.text = f"[{media_type}] {caption}".strip()
+
+            if event.voice or event.video_note:
+                if should_resp:
+                    file_path = await event.download_media(file="database/cache/")
+                    if file_path:
+                        wav_path = file_path + ".wav"
+                        proc = await asyncio.create_subprocess_exec(
+                            'ffmpeg', '-y', '-i', file_path, '-ar', '16000', '-ac', '1', wav_path,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE
+                        )
+                        await proc.communicate()
+
+                        if os.path.exists(wav_path):
+                            with open(wav_path, "rb") as af:
+                                audio_bytes = af.read()
+                            os.remove(file_path)
+                            os.remove(wav_path)
+
+                            from llm.provider import transcribe_audio
+                            async with client.action(event.chat_id, 'record-audio'):
+                                transcription = await transcribe_audio(audio_bytes, "wav")
+
+                            if transcription:
+                                logger.info(f"🎙️ [Voice] Расшифровано: {transcription}")
+                                caption = event.message.text or ""
+                                event.message.text = f"[Голосовое: {transcription}] {caption}".strip()
+                            else:
+                                event.message.text = "[Голосовое сообщение (не удалось расшифровать)]"
+                        else:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+
+            if event.video and not event.video_note:
+                if should_resp:
+                    try:
+                        file_path = await event.download_media(file="database/cache/")
+                        if file_path:
+                            caption = event.message.text or ""
+                            event.message.text = (
+                                f"[Видеофайл: {file_path}. Используй execute_shell или get_cadres для анализа.] "
+                                f"{caption}"
+                            ).strip()
+                    except Exception as ve:
+                        logger.error(f"[Video] Ошибка скачивания: {ve}")
+
+            if not should_resp:
+                return
+
+            from tg.state import set_action
+            set_action(f"Отвечает {sender_name}")
+
+            # Сразу заходим в сеть и читаем
+            try:
+                await client(UpdateStatusRequest(offline=False))
+            except Exception:
+                pass
+            await client.send_read_acknowledge(event.chat_id, event.message)
+
+            # Агентный цикл
+            response, pending_actions = await generate_thought(event, image_url=image_url)
+
+            if response:
+                await asyncio.sleep(random.uniform(0.5, 2.0))
+                reply_id = event.message.id if not event.is_private else None
+                await send_message(client, event.chat_id, response, reply_to=reply_id)
+                save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                logger.info(f"📤 [Response]: {response[:100]}")
+
+            if pending_actions:
+                await asyncio.sleep(0.3)
+                await execute_pending_actions(client, event, pending_actions)
+
+        except Exception as e:
+            import traceback
+            logger.error(f"🔥 ОШИБКА В EVENTS.PY: {e}")
+            traceback.print_exc()
+            await alert_owner(client, f"Ошибка в events.py: {e}")
+        finally:
+            from tg.state import get_action, set_action
+            if "Отвечает" in get_action():
+                set_action("Онлайн")
