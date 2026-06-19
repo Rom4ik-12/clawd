@@ -370,7 +370,8 @@ def register_handlers(client):
             await client.send_read_acknowledge(event.chat_id, event.message)
 
             # Агентный цикл
-            response, pending_actions = await generate_thought(event, image_url=image_url)
+            async with client.action(event.chat_id, 'typing'):
+                response, pending_actions = await generate_thought(event, image_url=image_url)
 
             if response:
                 await asyncio.sleep(random.uniform(0.5, 2.0))
