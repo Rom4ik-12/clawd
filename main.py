@@ -9,6 +9,8 @@ from memory.sqlite import init_db
 from memory.loader import load_style_examples
 from automation.scheduler import background_routine
 
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
