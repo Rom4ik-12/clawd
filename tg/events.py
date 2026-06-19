@@ -75,6 +75,48 @@ async def execute_pending_actions(client, event, pending_actions: list):
                 await client.send_message(username, text)
                 logger.info(f"📨 [Agent] Написал {username}: {text}")
 
+            elif name == "send_file":
+                target = args.get("target") or event.chat_id
+                path = args.get("path", "")
+                caption = args.get("caption", "")
+                if path:
+                    expanded = os.path.expanduser(path)
+                    await client.send_file(target, expanded, caption=caption)
+                    logger.info(f"📁 [Agent] Отправил файл {path} в {target}")
+
+            elif name == "create_poll":
+                target = args.get("target") or event.chat_id
+                question = args.get("question", "")
+                options = args.get("options", [])
+                is_anonymous = args.get("is_anonymous", True)
+                is_quiz = args.get("is_quiz", False)
+                correct_option_id = args.get("correct_option_id")
+
+                from telethon.tl.types import InputMediaPoll, Poll, PollAnswer
+                poll_answers = [
+                    PollAnswer(text=opt, option=str(i).encode('utf-8'))
+                    for i, opt in enumerate(options)
+                ]
+                poll_obj = Poll(
+                    id=random.randint(1, 1000000000),
+                    question=question,
+                    answers=poll_answers,
+                    closed=False,
+                    public_voters=not is_anonymous,
+                    multiple_choice=False,
+                    quiz=is_quiz
+                )
+                correct_answers = None
+                if is_quiz and correct_option_id is not None:
+                    correct_answers = [str(correct_option_id).encode('utf-8')]
+                
+                poll_media = InputMediaPoll(
+                    poll=poll_obj,
+                    correct_answers=correct_answers
+                )
+                await client.send_message(target, file=poll_media)
+                logger.info(f"📊 [Agent] Создал опрос '{question}' в {target}")
+
             elif name == "join_channel":
                 from internet.telegram_reader import join_channel
                 result = await join_channel(client, args.get("channel", ""))

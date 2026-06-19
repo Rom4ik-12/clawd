@@ -51,6 +51,8 @@ def get_system_prompt(owner_name: str = None) -> str:
 - get_system_info — информация о системе (CPU, RAM, disk, uptime)
 - download_file — скачать файл по URL
 - send_message — написать кому-то в Telegram
+- send_file — отправить файл (фото, видео, документ) в Telegram
+- create_poll — создать и отправить опрос или викторину в Telegram
 - join_channel / leave_channel — вступить/выйти из чата
 - click_button — нажать кнопку в сообщении
 - react — поставить реакцию

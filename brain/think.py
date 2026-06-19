@@ -419,6 +419,8 @@ async def generate_thought(event, image_url: str = None):
                     pending_actions.append({"name": func_name, "args": args})
                     action_map = {
                         "send_message": f"сообщение {args.get('username')} будет отправлено",
+                        "send_file": f"файл {args.get('path')} будет отправлен",
+                        "create_poll": f"опрос '{args.get('question')}' будет создан и отправлен",
                         "join_channel": f"подписка на {args.get('channel')} запланирована",
                         "leave_channel": f"выход из {args.get('channel')} запланирован",
                         "click_button": f"нажму кнопку [{args.get('index', '?')}]",
@@ -550,6 +552,52 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     tool_result = await download_file(args.get("url", ""), args.get("dest", None))
                 
                 # Telegram-действия
+                elif func_name == "send_file":
+                    dest = args.get("target") or target
+                    path = args.get("path", "")
+                    caption = args.get("caption", "")
+                    try:
+                        import os
+                        expanded = os.path.expanduser(path)
+                        await client.send_file(dest, expanded, caption=caption)
+                        tool_result = f"файл {path} успешно отправлен в {dest}"
+                    except Exception as e:
+                        tool_result = f"ошибка отправки файла: {e}"
+                elif func_name == "create_poll":
+                    dest = args.get("target") or target
+                    question = args.get("question", "")
+                    options = args.get("options", [])
+                    is_anonymous = args.get("is_anonymous", True)
+                    is_quiz = args.get("is_quiz", False)
+                    correct_option_id = args.get("correct_option_id")
+                    try:
+                        from telethon.tl.types import InputMediaPoll, Poll, PollAnswer
+                        import random
+                        poll_answers = [
+                            PollAnswer(text=opt, option=str(i).encode('utf-8'))
+                            for i, opt in enumerate(options)
+                        ]
+                        poll_obj = Poll(
+                            id=random.randint(1, 1000000000),
+                            question=question,
+                            answers=poll_answers,
+                            closed=False,
+                            public_voters=not is_anonymous,
+                            multiple_choice=False,
+                            quiz=is_quiz
+                        )
+                        correct_answers = None
+                        if is_quiz and correct_option_id is not None:
+                            correct_answers = [str(correct_option_id).encode('utf-8')]
+                        
+                        poll_media = InputMediaPoll(
+                            poll=poll_obj,
+                            correct_answers=correct_answers
+                        )
+                        await client.send_message(dest, file=poll_media)
+                        tool_result = f"опрос '{question}' успешно отправлен в {dest}"
+                    except Exception as e:
+                        tool_result = f"ошибка создания опроса: {e}"
                 elif func_name == "send_message":
                     username = args.get("username", "")
                     msg_text = args.get("text", "")

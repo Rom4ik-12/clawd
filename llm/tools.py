@@ -143,6 +143,45 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "send_file",
+            "description": "Отправить файл (документ, фото, видео) пользователю или в чат в Telegram.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Юзернейм (@username) или числовой ID (по умолчанию текущий чат)"},
+                    "path": {"type": "string", "description": "Путь к файлу на сервере"},
+                    "caption": {"type": "string", "description": "Подпись к файлу"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_poll",
+            "description": "Создать и отправить опрос или викторину в Telegram.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Юзернейм (@username) или числовой ID (по умолчанию текущий чат)"},
+                    "question": {"type": "string", "description": "Текст вопроса"},
+                    "options": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Список вариантов ответов (от 2 до 10 вариантов)"
+                    },
+                    "is_anonymous": {"type": "boolean", "description": "Анонимный ли опрос (по умолчанию true)"},
+                    "is_quiz": {"type": "boolean", "description": "Является ли опрос викториной с правильным ответом (по умолчанию false)"},
+                    "correct_option_id": {"type": "integer", "description": "Индекс правильного ответа (0-indexed, требуется только если is_quiz=true)"}
+                },
+                "required": ["question", "options"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "join_channel",
             "description": "Подписаться на Telegram-канал или группу.",
             "parameters": {
