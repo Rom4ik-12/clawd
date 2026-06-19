@@ -42,6 +42,7 @@ _waiting_clear_context = {}
 _waiting_shell_cmd = {}
 _waiting_name = {}
 _waiting_bio = {}
+_waiting_username = {}
 _waiting_avatar = {}
 _waiting_timezone = {}
 _waiting_add_schedule = {}
@@ -163,6 +164,17 @@ def setup_handlers(bot, main_client):
             await event.edit(
                 "Изменение аватара\n\n"
                 "Отправь фотографию (сжатым фото или файлом), которую хочешь установить на аватар:",
+                buttons=[[Button.inline("Отмена", b"settings_menu")]]
+            )
+            await event.answer()
+
+        elif data == b"set_username":
+            _clear_state(event.sender_id)
+            _waiting_username[event.sender_id] = True
+            await event.edit(
+                "Изменение юзернейма\n\n"
+                "Отправь новый юзернейм (без @, минимум 5 символов):\n"
+                "Отправьте - чтобы удалить юзернейм.",
                 buttons=[[Button.inline("Отмена", b"settings_menu")]]
             )
             await event.answer()
@@ -335,6 +347,30 @@ def setup_handlers(bot, main_client):
                 await event.respond("Описание успешно обновлено!")
             except Exception as e:
                 await event.respond(f"Ошибка обновления описания: {e}")
+                
+            await _show_settings_menu(bot, event.chat_id)
+            return
+
+        # Изменение юзернейма
+        if _waiting_username.get(event.sender_id):
+            username_text = (event.message.text or "").strip()
+            if not username_text:
+                return
+            _waiting_username.pop(event.sender_id, None)
+            
+            if username_text == "-":
+                username_text = ""
+                
+            await event.respond("Обновляю юзернейм...")
+            try:
+                from telethon.tl.functions.account import UpdateUsernameRequest
+                await main_client(UpdateUsernameRequest(username=username_text))
+                if username_text:
+                    await event.respond(f"Юзернейм успешно изменен на @{username_text}!")
+                else:
+                    await event.respond("Юзернейм успешно удален!")
+            except Exception as e:
+                await event.respond(f"Ошибка обновления юзернейма: {e}")
                 
             await _show_settings_menu(bot, event.chat_id)
             return
@@ -591,6 +627,7 @@ def _clear_state(user_id):
     _waiting_shell_cmd.pop(user_id, None)
     _waiting_name.pop(user_id, None)
     _waiting_bio.pop(user_id, None)
+    _waiting_username.pop(user_id, None)
     _waiting_avatar.pop(user_id, None)
     _waiting_timezone.pop(user_id, None)
     _waiting_add_schedule.pop(user_id, None)
@@ -664,7 +701,8 @@ async def _show_profile_settings(bot, chat_id, event=None):
         markup = [
             [Button.inline("Изменить имя в Telegram", b"set_name"),
              Button.inline("Изменить био", b"set_bio")],
-            [Button.inline("Изменить аватар", b"set_avatar")],
+            [Button.inline("Изменить аватар", b"set_avatar"),
+             Button.inline("Изменить юзернейм", b"set_username")],
             [Button.inline("Назад", b"settings_menu")]
         ]
         if event and hasattr(event, 'edit'):
