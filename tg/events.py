@@ -117,6 +117,14 @@ async def execute_pending_actions(client, event, pending_actions: list):
                 await client.send_message(target, file=poll_media)
                 logger.info(f"📊 [Agent] Создал опрос '{question}' в {target}")
 
+            elif name == "send_location":
+                target = args.get("target") or event.chat_id
+                lat = float(args.get("latitude", 0))
+                lon = float(args.get("longitude", 0))
+                from telethon.tl.types import InputMediaGeoPoint, InputGeoPoint
+                await client.send_message(target, file=InputMediaGeoPoint(InputGeoPoint(lat=lat, long=lon)))
+                logger.info(f"📍 [Agent] Отправил локацию ({lat}, {lon}) в {target}")
+
             elif name == "join_channel":
                 from internet.telegram_reader import join_channel
                 result = await join_channel(client, args.get("channel", ""))

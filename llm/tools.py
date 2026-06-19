@@ -182,6 +182,22 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "send_location",
+            "description": "Отправить геопозицию (локацию) в Telegram.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Юзернейм (@username) или числовой ID (по умолчанию текущий чат)"},
+                    "latitude": {"type": "number", "description": "Широта (latitude), например 55.7558"},
+                    "longitude": {"type": "number", "description": "Долгота (longitude), например 37.6173"}
+                },
+                "required": ["latitude", "longitude"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "join_channel",
             "description": "Подписаться на Telegram-канал или группу.",
             "parameters": {

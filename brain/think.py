@@ -421,6 +421,7 @@ async def generate_thought(event, image_url: str = None):
                         "send_message": f"сообщение {args.get('username')} будет отправлено",
                         "send_file": f"файл {args.get('path')} будет отправлен",
                         "create_poll": f"опрос '{args.get('question')}' будет создан и отправлен",
+                        "send_location": f"локация ({args.get('latitude')}, {args.get('longitude')}) будет отправлена",
                         "join_channel": f"подписка на {args.get('channel')} запланирована",
                         "leave_channel": f"выход из {args.get('channel')} запланирован",
                         "click_button": f"нажму кнопку [{args.get('index', '?')}]",
@@ -598,6 +599,16 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                         tool_result = f"опрос '{question}' успешно отправлен в {dest}"
                     except Exception as e:
                         tool_result = f"ошибка создания опроса: {e}"
+                elif func_name == "send_location":
+                    dest = args.get("target") or target
+                    lat = float(args.get("latitude", 0))
+                    lon = float(args.get("longitude", 0))
+                    try:
+                        from telethon.tl.types import InputMediaGeoPoint, InputGeoPoint
+                        await client.send_message(dest, file=InputMediaGeoPoint(InputGeoPoint(lat=lat, long=lon)))
+                        tool_result = f"локация ({lat}, {lon}) успешно отправлена в {dest}"
+                    except Exception as e:
+                        tool_result = f"ошибка отправки локации: {e}"
                 elif func_name == "send_message":
                     username = args.get("username", "")
                     msg_text = args.get("text", "")

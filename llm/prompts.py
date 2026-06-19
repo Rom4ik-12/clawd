@@ -53,6 +53,7 @@ def get_system_prompt(owner_name: str = None) -> str:
 - send_message — написать кому-то в Telegram
 - send_file — отправить файл (фото, видео, документ) в Telegram
 - create_poll — создать и отправить опрос или викторину в Telegram
+- send_location — отправить географические координаты (локацию) в Telegram
 - join_channel / leave_channel — вступить/выйти из чата
 - click_button — нажать кнопку в сообщении
 - react — поставить реакцию
