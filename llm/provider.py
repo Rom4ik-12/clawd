@@ -45,15 +45,21 @@ def _get_client_and_model(model: str):
     """Возвращает (client, real_model_id) по префиксу модели."""
     if model.startswith("custom/"):
         real_model = model[len("custom/"):]
-        if custom_client is None:
-            logger.warning("custom_client не настроен (CUSTOM_API_BASE_URL пуст), пропускаем")
+        if custom_client is None or not CUSTOM_API_KEY:
+            logger.warning("custom_client не настроен (CUSTOM_API_BASE_URL или CUSTOM_API_KEY пуст), пропускаем")
             raise ValueError("custom_client not configured")
         return custom_client, real_model
     elif model.startswith("codexsale/"):
+        if not CODEXSALE_API_KEY:
+            raise ValueError("codexsale API key is not configured")
         return codexsale_client, model[len("codexsale/"):]
     elif model.startswith("runic/"):
+        if not RUNIC_API_KEY:
+            raise ValueError("runic API key is not configured")
         return runic_client, model[len("runic/"):]
     else:
+        if not OPENROUTER_API_KEY:
+            raise ValueError("openrouter API key is not configured")
         return openrouter_client, model
 
 
