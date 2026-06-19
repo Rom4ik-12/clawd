@@ -73,6 +73,22 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "edit_file",
+            "description": "Заменить определенный фрагмент текста в существующем файле на новый.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Путь к файлу"},
+                    "search_text": {"type": "string", "description": "Точный текст или блок, который нужно найти и заменить в файле"},
+                    "replace_text": {"type": "string", "description": "Текст, на который нужно заменить найденный фрагмент"}
+                },
+                "required": ["path", "search_text", "replace_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_directory",
             "description": "Посмотреть список файлов и папок в директории на хосте.",
             "parameters": {

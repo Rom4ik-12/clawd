@@ -94,6 +94,24 @@ async def write_file(path: str, content: str, append: bool = False) -> str:
         return f"Ошибка записи файла: {e}"
 
 
+async def edit_file(path: str, search_text: str, replace_text: str) -> str:
+    """Находит search_text в файле и заменяет на replace_text."""
+    try:
+        expanded = os.path.expanduser(path)
+        if not os.path.exists(expanded):
+            return f"Файл не найден: {path}"
+        with open(expanded, "r", encoding="utf-8") as f:
+            content = f.read()
+        if search_text not in content:
+            return f"❌ Фрагмент для замены не найден в файле {path}. Убедитесь, что поиск совпадает точно."
+        new_content = content.replace(search_text, replace_text)
+        with open(expanded, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return f"✅ Успешно произведена замена в файле {path}."
+    except Exception as e:
+        return f"Ошибка при редактировании файла: {e}"
+
+
 async def list_directory(path: str = ".") -> str:
     """Возвращает список файлов/папок в директории."""
     try:

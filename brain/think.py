@@ -193,6 +193,14 @@ async def generate_thought(event, image_url: str = None):
                         args.get("append", False)
                     )
 
+                elif func_name == "edit_file":
+                    from host.executor import edit_file
+                    tool_result = await edit_file(
+                        args.get("path", ""),
+                        args.get("search_text", ""),
+                        args.get("replace_text", "")
+                    )
+
                 elif func_name == "list_directory":
                     from host.executor import list_directory
                     tool_result = await list_directory(args.get("path", "."))
@@ -523,6 +531,13 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                 elif func_name == "write_file":
                     from host.executor import write_file
                     tool_result = await write_file(args.get("path", ""), args.get("content", ""), args.get("append", False))
+                elif func_name == "edit_file":
+                    from host.executor import edit_file
+                    tool_result = await edit_file(
+                        args.get("path", ""),
+                        args.get("search_text", ""),
+                        args.get("replace_text", "")
+                    )
                 elif func_name == "list_directory":
                     from host.executor import list_directory
                     tool_result = await list_directory(args.get("path", "."))
