@@ -72,7 +72,7 @@ def setup_handlers(bot, main_client):
             [Button.inline("Системный статус", b"sys_status")],
             [Button.inline("Выполнить команду", b"shell_cmd"),
              Button.inline("История команд", b"shell_history")],
-            [Button.inline("Память и Саммари 🧠", b"mem_menu")],
+            [Button.inline("Память и Саммари", b"mem_menu")],
             [Button.inline("Настройки", b"settings_menu")],
         ]
         return text, markup
@@ -132,17 +132,17 @@ def setup_handlers(bot, main_client):
         elif data == b"clear_context" or data == b"mem_menu":
             _clear_state(event.sender_id)
             text = (
-                "🧠 Управление памятью чатов\n\n"
+                "Управление памятью чатов\n\n"
                 "Выбери действие для просмотра или очистки истории сообщений и саммари:"
             )
             markup = [
-                [Button.inline("📝 Просмотр сообщений (История)", b"mem_view_msgs")],
-                [Button.inline("📋 Просмотр саммари", b"mem_view_sums")],
-                [Button.inline("⚡ Сгенерировать саммари сейчас", b"mem_gen_sum")],
-                [Button.inline("🧹 Очистить ВСЁ (сообщения + саммари)", b"mem_clear_all")],
-                [Button.inline("🗑️ Удалить только сообщения", b"mem_clear_msgs")],
-                [Button.inline("🗑️ Удалить только саммари", b"mem_clear_sums")],
-                [Button.inline("« Назад в меню", b"main_menu")]
+                [Button.inline("Просмотр сообщений (История)", b"mem_view_msgs")],
+                [Button.inline("Просмотр саммари", b"mem_view_sums")],
+                [Button.inline("Сгенерировать саммари сейчас", b"mem_gen_sum")],
+                [Button.inline("Очистить ВСЁ (сообщения + саммари)", b"mem_clear_all")],
+                [Button.inline("Удалить только сообщения", b"mem_clear_msgs")],
+                [Button.inline("Удалить только саммари", b"mem_clear_sums")],
+                [Button.inline("Назад в меню", b"main_menu")]
             ]
             await event.edit(text, buttons=markup)
             await event.answer()
