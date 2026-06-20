@@ -382,34 +382,6 @@ def register_handlers(client):
                         logger.error(f"[Document] Ошибка скачивания: {de}")
 
             if not should_resp:
-                try:
-                    msg_lower = (event.message.text or "").lower().strip(" .,!?")
-                    thanks_words = {"спасибо", "спс", "спасиб", "thanks", "thank you", "дякую", "от души"}
-                    is_to_me = False
-                    if event.message.is_reply:
-                        reply_msg = await event.get_reply_message()
-                        if reply_msg:
-                            reply_sender = await reply_msg.get_sender()
-                            me_id = getattr(client, 'me_id', None)
-                            if reply_sender and me_id and reply_sender.id == me_id:
-                                is_to_me = True
-                    
-                    me_username = getattr(client, 'me_username', '')
-                    me_first_name = getattr(client, 'me_first_name', "Claw'd")
-                    if me_username and f"@{me_username.lower()}" in msg_lower:
-                        is_to_me = True
-                    elif me_first_name and me_first_name.lower() in msg_lower:
-                        is_to_me = True
-
-                    if is_to_me and any(word in msg_lower for word in thanks_words):
-                        await client(SendReactionRequest(
-                            peer=event.chat_id,
-                            msg_id=event.message.id,
-                            reaction=[ReactionEmoji(emoticon="❤️")]
-                        ))
-                        logger.info(f"❤️ Поставил автоматическую реакцию спасибо в чате {event.chat_id}")
-                except Exception as re_err:
-                    logger.debug(f"Ошибка автореакции на спасибо: {re_err}")
                 return
 
             chat_id = event.chat_id
@@ -419,16 +391,6 @@ def register_handlers(client):
                     prev_task.cancel()
                     logger.info(f"🔄 [Events] Отменен предыдущий запрос для чата {chat_id}")
             RUNNING_TASKS[chat_id] = asyncio.current_task()
-
-            # Автоматически ставим сердечко (основная реакция), показывая, что приняли задачу в работу
-            try:
-                await client(SendReactionRequest(
-                    peer=event.chat_id,
-                    msg_id=event.message.id,
-                    reaction=[ReactionEmoji(emoticon="❤️")]
-                ))
-            except Exception as re_err:
-                logger.debug(f"Ошибка установки стартовой реакции: {re_err}")
 
             from tg.state import set_action
             set_action(f"Отвечает {sender_name}")
