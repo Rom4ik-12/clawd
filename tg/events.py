@@ -200,10 +200,57 @@ async def execute_pending_actions(client, event, pending_actions: list):
             logger.warning(f"⚠️ [Agent] Ошибка действия {name}: {e}")
 
 
+async def ensure_static_image(file_path: str) -> str:
+    """
+    Проверяет файл. Если это видео (WebM) или анимация, пытается извлечь первый кадр
+    с помощью ffmpeg и вернуть путь к новому JPEG-файлу.
+    Если это неподдерживаемый формат (например, TGS), возвращает None.
+    Иначе возвращает исходный file_path.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return file_path
+        
+    # Читаем первые несколько байт для определения сигнатуры
+    with open(file_path, "rb") as f:
+        header = f.read(4)
+        
+    is_webm = header == b'\x1a\x45\xdf\xa3' or file_path.lower().endswith('.webm')
+    is_gzip = header.startswith(b'\x1f\x8b') or file_path.lower().endswith('.tgs')
+    
+    if is_webm:
+        jpg_path = file_path + ".jpg"
+        try:
+            # Извлекаем первый кадр
+            proc = await asyncio.create_subprocess_exec(
+                'ffmpeg', '-y', '-i', file_path, '-vframes', '1', '-f', 'image2', jpg_path,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            if os.path.exists(jpg_path) and os.path.getsize(jpg_path) > 0:
+                os.remove(file_path)
+                return jpg_path
+        except Exception as e:
+            logger.error(f"Ошибка конвертации WebM в JPG: {e}")
+            
+    elif is_gzip:
+        # TGS анимации не поддерживаются без специального рендерера
+        logger.warning(f"Анимированные стикеры TGS не поддерживаются для Vision: {file_path}")
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        return None
+        
+    return file_path
+
+
 async def analyze_and_save_sticker_async(client, event):
     try:
         os.makedirs("database/cache", exist_ok=True)
         file_path = await event.download_media(file="database/cache/")
+        if not file_path:
+            return
+        
+        file_path = await ensure_static_image(file_path)
         if not file_path:
             return
         
@@ -213,7 +260,7 @@ async def analyze_and_save_sticker_async(client, event):
         if os.path.exists(file_path):
             os.remove(file_path)
             
-        image_url = f"data:image/webp;base64,{b64_data}"
+        image_url = f"data:image/jpeg;base64,{b64_data}"
         
         prompt = (
             "Ты — ИИ-аналитик стикеров. Опиши этот стикер кратко, 1-3 словами или ключевыми тегами на русском языке. "
@@ -362,13 +409,15 @@ def register_handlers(client):
                 if should_resp:
                     file_path = await event.download_media(file="database/cache/")
                     if file_path:
-                        with open(file_path, "rb") as f:
-                            b64 = base64.b64encode(f.read()).decode('utf-8')
-                        os.remove(file_path)
-                        image_url = f"data:image/jpeg;base64,{b64}"
-                        caption = event.message.text or ""
-                        media_type = "Фото" if event.photo else "Стикер"
-                        event.message.text = f"[{media_type}] {caption}".strip()
+                        file_path = await ensure_static_image(file_path)
+                        if file_path:
+                            with open(file_path, "rb") as f:
+                                b64 = base64.b64encode(f.read()).decode('utf-8')
+                            os.remove(file_path)
+                            image_url = f"data:image/jpeg;base64,{b64}"
+                            caption = event.message.text or ""
+                            media_type = "Фото" if event.photo else "Стикер"
+                            event.message.text = f"[{media_type}] {caption}".strip()
 
             if event.voice or event.video_note:
                 if should_resp:
