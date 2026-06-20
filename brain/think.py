@@ -518,7 +518,6 @@ async def generate_thought(event, image_url: str = None):
                     )
 
                 elif func_name == "restart_bot":
-                    import sys
                     tool_result = "🔄 Запускаю перезапуск бота..."
                     async def do_exit():
                         await asyncio.sleep(1.0)
@@ -873,7 +872,6 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                         args.get("count", 5)
                     )
                 elif func_name == "restart_bot":
-                    import sys
                     tool_result = "🔄 Запускаю перезапуск бота..."
                     async def do_exit():
                         await asyncio.sleep(1.0)
