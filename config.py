@@ -39,7 +39,7 @@ LLM_MODELS = [
 
 # Модели с поддержкой зрения (vision)
 VISION_MODELS = [
-    "gemini/gemini-2.0-flash",   # Google Gemini — основной vision
+    "gemini/gemini-3.5-flash",   # Google Gemini — основной vision
     "runic/minimax-m3",
     "codexsale/gpt-4o",
 ]
