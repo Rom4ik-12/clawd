@@ -24,6 +24,7 @@ from config import OWNER_ID, OWNER_NAME
 logger = logging.getLogger("events")
 
 BOT_START_TIME = time.time()
+RUNNING_TASKS = {}
 
 
 def get_uptime() -> str:
@@ -359,6 +360,14 @@ def register_handlers(client):
             if not should_resp:
                 return
 
+            chat_id = event.chat_id
+            if chat_id in RUNNING_TASKS:
+                prev_task = RUNNING_TASKS[chat_id]
+                if not prev_task.done():
+                    prev_task.cancel()
+                    logger.info(f"🔄 [Events] Отменен предыдущий запрос для чата {chat_id}")
+            RUNNING_TASKS[chat_id] = asyncio.current_task()
+
             from tg.state import set_action
             set_action(f"Отвечает {sender_name}")
 
@@ -384,6 +393,9 @@ def register_handlers(client):
                 await asyncio.sleep(0.3)
                 await execute_pending_actions(client, event, pending_actions)
 
+        except asyncio.CancelledError:
+            logger.info(f"📥 Запрос для чата {event.chat_id} был отменен новым сообщением")
+            raise
         except Exception as e:
             import traceback
             logger.error(f"🔥 ОШИБКА В EVENTS.PY: {e}")

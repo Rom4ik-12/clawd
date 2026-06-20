@@ -833,7 +833,7 @@ async def _show_schedulers_menu(bot, chat_id, event=None):
                     f"ID: {sid} | Тип: {ttype}\n"
                     f"Режим: {stype} ({sval})\n"
                     f"Следующий запуск: {nrun or 'неизвестно'}\n"
-                    f"Поручение: {payload[:80]}..."
+                    f"Поручение: {payload if len(payload) <= 2000 else f'{payload[:2000]}...'}"
                 )
         
         text = (

@@ -468,6 +468,92 @@ AGENT_TOOLS = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_profile",
+            "description": "Обновить настройки профиля юзербота (имя, био, юзернейм, аватар).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "first_name": {"type": "string", "description": "Имя"},
+                    "last_name": {"type": "string", "description": "Фамилия"},
+                    "about": {"type": "string", "description": "Описание профиля (био, о себе)"},
+                    "username": {"type": "string", "description": "Новый юзернейм (без @)"},
+                    "avatar_path": {"type": "string", "description": "Путь к файлу картинки на сервере или URL для скачивания и установки нового аватара"}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_telethon_code",
+            "description": "Выполнить произвольный асинхронный Python-код с доступом к клиенту Telethon (client) и событию (event). Возвращает значение переменной result или последнее выражение.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "Асинхронный код на Python. Пример: 'result = await client.get_me()'"}
+                },
+                "required": ["code"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_music",
+            "description": "Отправить аудиофайл как музыкальный трек с указанием исполнителя и названия.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string", "description": "Получатель (@username, ID или ссылка). по умолчанию текущий чат."},
+                    "path": {"type": "string", "description": "Путь к аудиофайлу на сервере"},
+                    "title": {"type": "string", "description": "Название песни/трека"},
+                    "performer": {"type": "string", "description": "Имя исполнителя"},
+                    "caption": {"type": "string", "description": "Текст сообщения к аудиофайлу"}
+                },
+                "required": ["path", "title", "performer"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_video_frames",
+            "description": "Извлечь кадры из видеофайла для визуального анализа.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Путь к видеофайлу на сервере"},
+                    "count": {"type": "integer", "description": "Количество кадров для извлечения (по умолчанию 5)"}
+                },
+                "required": ["path"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "restart_bot",
+            "description": "Перезапустить процесс бота (применит все изменения в коде).",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reload_skills",
+            "description": "Перезагрузить динамические скиллы из папки skills.",
+            "parameters": {
+                "type": "object",
+                "properties": {}
+            }
+        }
+    },
 ]
 
 
@@ -503,3 +589,36 @@ def execute_local_tool(name: str, args: dict):
         return "мысли зафиксированы"
 
     return None  # не локальный инструмент
+
+
+import importlib.util
+
+DYNAMIC_SKILLS = {}
+
+def load_dynamic_skills():
+    global DYNAMIC_SKILLS
+    skills_dir = "skills"
+    if not os.path.exists(skills_dir):
+        os.makedirs(skills_dir, exist_ok=True)
+        return
+        
+    for filename in os.listdir(skills_dir):
+        if filename.endswith(".py") and not filename.startswith("_"):
+            skill_name = filename[:-3]
+            path = os.path.join(skills_dir, filename)
+            try:
+                spec = importlib.util.spec_from_file_location(skill_name, path)
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                if hasattr(mod, "SCHEMA") and hasattr(mod, "execute"):
+                    DYNAMIC_SKILLS[skill_name] = mod
+                    # Check if already in AGENT_TOOLS
+                    exists = any(t.get("function", {}).get("name") == skill_name for t in AGENT_TOOLS)
+                    if not exists:
+                        AGENT_TOOLS.append(mod.SCHEMA)
+            except Exception as e:
+                import logging
+                logging.getLogger("tools").error(f"Error loading skill {skill_name}: {e}")
+
+# Выполняем автозагрузку при импорте модуля
+load_dynamic_skills()

@@ -211,3 +211,38 @@ def _fmt_size(size_bytes: int) -> str:
             return f"{size_bytes:.1f} {unit}"
         size_bytes /= 1024
     return f"{size_bytes:.1f} TB"
+
+
+async def get_video_frames(path: str, count: int = 5) -> str:
+    """Извлекает count кадров из видеофайла и сохраняет в database/cache."""
+    try:
+        expanded = os.path.expanduser(path)
+        if not os.path.exists(expanded):
+            return f"Видеофайл не найден: {path}"
+            
+        # Получаем длительность
+        cmd = f"ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '{expanded}'"
+        proc = await asyncio.create_subprocess_shell(cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        stdout, _ = await proc.communicate()
+        try:
+            duration = float(stdout.decode().strip())
+        except Exception:
+            duration = 10.0 # резервное значение
+            
+        interval = duration / (count + 1)
+        frames = []
+        os.makedirs("database/cache", exist_ok=True)
+        for i in range(1, count + 1):
+            ss = i * interval
+            out_path = f"database/cache/frame_{int(ss)}.jpg"
+            cmd_extract = f"ffmpeg -y -ss {ss} -i '{expanded}' -vframes 1 -q:v 2 '{out_path}'"
+            proc_extract = await asyncio.create_subprocess_shell(cmd_extract, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await proc_extract.communicate()
+            if os.path.exists(out_path):
+                frames.append(out_path)
+                
+        if not frames:
+            return "❌ Не удалось извлечь кадры из видео."
+        return f"✅ Извлечено {len(frames)} кадров из видео:\n" + "\n".join(frames)
+    except Exception as e:
+        return f"Ошибка при извлечении кадров: {e}"
