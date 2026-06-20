@@ -357,6 +357,27 @@ def register_handlers(client):
                     except Exception as ve:
                         logger.error(f"[Video] Ошибка скачивания: {ve}")
 
+            if event.document and not (event.photo or event.sticker or event.voice or event.video_note or event.video):
+                if should_resp:
+                    caption = (event.message.text or "").lower()
+                    if "скилл" in caption or "skill" in caption or "защита" in caption:
+                        doc_name = None
+                        for attr in getattr(event.document, 'attributes', []):
+                            if hasattr(attr, 'file_name'):
+                                doc_name = attr.file_name
+                                break
+                        if not doc_name:
+                            doc_name = "unnamed_skill.md"
+                        
+                        os.makedirs("skills", exist_ok=True)
+                        dest_path = os.path.join("skills", doc_name)
+                        file_path = await event.download_media(file=dest_path)
+                        if file_path:
+                            if doc_name.endswith(".py"):
+                                from llm.tools import load_dynamic_skills
+                                load_dynamic_skills()
+                            event.message.text = f"[Загружен скилл: {doc_name}] {event.message.text or ''}".strip()
+
             if not should_resp:
                 return
 

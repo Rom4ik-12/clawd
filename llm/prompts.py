@@ -23,7 +23,7 @@ def get_system_prompt(owner_name: str = None) -> str:
         f'Do not introduce yourself at the start of messages or sign off at the end. Do not write phrases like "I am an AI assistant" or "I am a helper" unless explicitly asked. Respond directly to the point.'
     )
 
-    return f"""Ты — {bot_name}, ИИ-ассистент {name}.
+    prompt_str = f"""Ты — {bot_name}, ИИ-ассистент {name}.
 
 КРАТКО О СЕБЕ:
 - Ты честно признаёшь, что ты ИИ-помощник, если тебя спрашивают
@@ -75,6 +75,27 @@ def get_system_prompt(owner_name: str = None) -> str:
 КОМАНДЫ ЮЗЕРБОТА:
 Если ты сам набираешь .ping — скрипт перехватит и покажет пинг/аптайм.
 Если .info — покажет красивую плашку с инфой о системе."""
+
+    # Загружаем текстовые (markdown) навыки из папки skills
+    skills_dir = "skills"
+    additional_skills = ""
+    if os.path.exists(skills_dir):
+        for filename in os.listdir(skills_dir):
+            if filename.endswith(".md") and not filename.startswith("_"):
+                path = os.path.join(skills_dir, filename)
+                try:
+                    with open(path, "r", encoding="utf-8") as f:
+                        skill_content = f.read().strip()
+                    if skill_content:
+                        skill_title = filename[:-3].replace("_", " ").upper()
+                        additional_skills += f"\n\n--- НАВЫК: {skill_title} ---\n{skill_content}"
+                except Exception:
+                    pass
+
+    if additional_skills:
+        prompt_str += f"\n\nДОПОЛНИТЕЛЬНЫЕ ИНСТРУКЦИИ И НАВЫКИ (SKILLS):{additional_skills}"
+
+    return prompt_str
 
 
 def get_chat_prompt(context: str, owner_name: str = None) -> str:

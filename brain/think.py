@@ -173,6 +173,16 @@ async def generate_thought(event, image_url: str = None):
 
                 logger.info(f"🔧 [Agent] {func_name}({args})")
 
+                # Глобальная проверка безопасности
+                DANGEROUS_TOOLS = {"execute_shell", "write_file", "edit_file", "execute_telethon_code", "update_profile", "restart_bot", "reload_skills"}
+                if func_name in DANGEROUS_TOOLS:
+                    from config import OWNER_ID
+                    if sender_id != OWNER_ID:
+                        tool_result = f"Отказано в доступе: инструмент {func_name} разрешен только владельцу."
+                        logger.warning(f"[Security] Заблокирована попытка {func_name} от пользователя {sender_id}")
+                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+                        continue
+
                 # Локальные инструменты
                 local_result = execute_local_tool(func_name, args)
                 if local_result is not None:
@@ -634,6 +644,16 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     
                 logger.info(f"🔧 [Scheduled Agent] {func_name}({args})")
                 
+                # Глобальная проверка безопасности
+                DANGEROUS_TOOLS = {"execute_shell", "write_file", "edit_file", "execute_telethon_code", "update_profile", "restart_bot", "reload_skills"}
+                if func_name in DANGEROUS_TOOLS:
+                    from config import OWNER_ID
+                    if str(peer) != str(OWNER_ID):
+                        tool_result = f"Отказано в доступе: инструмент {func_name} разрешен только владельцу."
+                        logger.warning(f"[Security] Заблокирована попытка {func_name} в фоновой задаче для {peer}")
+                        messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+                        continue
+
                 tool_result = None
                 
                 # Выполняем инструменты напрямую
