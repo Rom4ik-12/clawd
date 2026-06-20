@@ -200,6 +200,46 @@ async def execute_pending_actions(client, event, pending_actions: list):
             logger.warning(f"⚠️ [Agent] Ошибка действия {name}: {e}")
 
 
+async def analyze_and_save_sticker_async(client, event):
+    try:
+        os.makedirs("database/cache", exist_ok=True)
+        file_path = await event.download_media(file="database/cache/")
+        if not file_path:
+            return
+        
+        with open(file_path, "rb") as f:
+            b64_data = base64.b64encode(f.read()).decode('utf-8')
+        
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            
+        image_url = f"data:image/webp;base64,{b64_data}"
+        
+        prompt = (
+            "Ты — ИИ-аналитик стикеров. Опиши этот стикер кратко, 1-3 словами или ключевыми тегами на русском языке. "
+            "Например: 'подмигивающий кот', 'смеющийся череп', 'грустный смайлик', 'сердечко'. "
+            "Ответь СТРОГО одной фразой или ключевыми словами через запятую, без знаков препинания в конце и лишнего текста."
+        )
+        
+        from llm.provider import generate_response
+        description = await generate_response(prompt, is_vision=True, image_url=image_url)
+        description_clean = description.strip().lower().replace(".", "").replace('"', '').replace("'", "")
+        
+        if description_clean:
+            emoji = ""
+            for attr in getattr(event.sticker, 'attributes', []):
+                if hasattr(attr, 'alt') and attr.alt:
+                    emoji = attr.alt
+                    break
+            
+            final_desc = f"{description_clean}, {emoji}" if emoji else description_clean
+            from memory.sqlite import save_sticker
+            save_sticker(event.message.file.id, final_desc)
+            logger.info(f"✨ [Sticker Collector] Автосохранение стикера с описанием от Vision: {final_desc}")
+    except Exception as e:
+        logger.warning(f"Ошибка при анализе стикера через Vision: {e}")
+
+
 def register_handlers(client):
     @client.on(events.NewMessage())
     async def handler(event):
@@ -219,19 +259,9 @@ def register_handlers(client):
                     logger.warning(f"Could not fetch owner entity on startup: {e}")
                     client.owner_username = ''
 
-            # Автоматический сбор (коллекционирование) стикеров, которые видит бот
+            # Автоматический сбор (коллекционирование) стикеров с анализом через Vision
             if event.sticker:
-                try:
-                    emoji = None
-                    for attr in getattr(event.sticker, 'attributes', []):
-                        if hasattr(attr, 'alt') and attr.alt:
-                            emoji = attr.alt
-                            break
-                    if emoji:
-                        from memory.sqlite import save_sticker
-                        save_sticker(event.message.file.id, emoji)
-                except Exception as st_err:
-                    logger.debug(f"Ошибка автосбора стикера: {st_err}")
+                asyncio.create_task(analyze_and_save_sticker_async(client, event))
 
             msg_text = (event.message.text or "").strip()
 
