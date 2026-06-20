@@ -176,6 +176,20 @@ async def execute_pending_actions(client, event, pending_actions: list):
                         reaction=[ReactionEmoji(emoticon=emoji)]
                     ))
 
+            elif name == "forward_messages":
+                from_chat = args.get("from_chat")
+                message_ids = args.get("message_ids", [])
+                to_chat = args.get("to_chat", event.chat_id)
+                if from_chat and message_ids:
+                    try:
+                        if isinstance(from_chat, str) and (from_chat.isdigit() or from_chat.lstrip('-').isdigit()):
+                            from_chat = int(from_chat)
+                        if isinstance(to_chat, str) and (to_chat.isdigit() or to_chat.lstrip('-').isdigit()):
+                            to_chat = int(to_chat)
+                        await client.forward_messages(to_chat, message_ids, from_chat)
+                    except Exception as fe:
+                        logger.error(f"Ошибка пересылки сообщений: {fe}")
+
             elif name == "send_sticker":
                 query = args.get("query", "")
                 file_id = get_matching_sticker(query)

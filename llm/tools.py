@@ -270,6 +270,26 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "forward_messages",
+            "description": "Переслать сообщения из одного чата в другой.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_chat": {"type": "string", "description": "ID чата или юзернейм источника (@username или id)."},
+                    "message_ids": {
+                        "type": "array",
+                        "items": {"type": "integer"},
+                        "description": "Список ID сообщений для пересылки."
+                    },
+                    "to_chat": {"type": "string", "description": "ID чата или юзернейм назначения. По умолчанию текущий чат."}
+                },
+                "required": ["from_chat", "message_ids"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "read_feed",
             "description": "Прочитать свежие посты из подписанных Telegram-каналов.",
             "parameters": {

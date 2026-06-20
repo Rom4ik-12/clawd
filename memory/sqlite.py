@@ -209,6 +209,33 @@ def save_sticker(file_id, description):
         conn.close()
 
 
+def delete_sticker(description):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM stickers WHERE description = ?", (description,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Ошибка удаления стикера: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_all_stickers():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT description FROM stickers ORDER BY description")
+        rows = c.fetchall()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def get_matching_sticker(query):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

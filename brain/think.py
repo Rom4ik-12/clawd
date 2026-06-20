@@ -561,6 +561,7 @@ async def generate_thought(event, image_url: str = None):
                         "click_button": f"нажму кнопку [{args.get('index', '?')}]",
                         "set_timer": f"таймер на {args.get('seconds')}с установлен",
                         "react": f"поставлю реакцию {args.get('emoji')}",
+                        "forward_messages": f"перешлю сообщения {args.get('message_ids')} из {args.get('from_chat')}",
                         "send_sticker": f"отправлю стикер '{args.get('query')}'",
                         "finish_task": f"задание завершено",
                     }
@@ -885,6 +886,20 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                             tool_result = f"✅ Музыка {performer} - {title} успешно отправлена в {dest}"
                     except Exception as e:
                         tool_result = f"Ошибка отправки музыки: {e}"
+                elif func_name == "forward_messages":
+                    from_chat = args.get("from_chat")
+                    message_ids = args.get("message_ids", [])
+                    to_chat = args.get("to_chat") or target
+                    if from_chat and message_ids:
+                        try:
+                            if isinstance(from_chat, str) and (from_chat.isdigit() or from_chat.lstrip('-').isdigit()):
+                                from_chat = int(from_chat)
+                            if isinstance(to_chat, str) and (to_chat.isdigit() or to_chat.lstrip('-').isdigit()):
+                                to_chat = int(to_chat)
+                            await client.forward_messages(to_chat, message_ids, from_chat)
+                            tool_result = f"✅ Сообщения {message_ids} пересланы из {from_chat} в {to_chat}"
+                        except Exception as e:
+                            tool_result = f"Ошибка пересылки сообщений: {e}"
                 elif func_name == "get_video_frames":
                     from host.executor import get_video_frames
                     tool_result = await get_video_frames(

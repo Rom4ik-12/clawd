@@ -45,6 +45,9 @@ _waiting_mem_gen_sum = {}
 _waiting_mem_clear_all = {}
 _waiting_mem_clear_msgs = {}
 _waiting_mem_clear_sums = {}
+_waiting_sticker_file = {}
+_waiting_sticker_desc = {}
+_waiting_sticker_delete = {}
 _waiting_shell_cmd = {}
 _waiting_name = {}
 _waiting_bio = {}
@@ -72,7 +75,8 @@ def setup_handlers(bot, main_client):
             [Button.inline("Системный статус", b"sys_status")],
             [Button.inline("Выполнить команду", b"shell_cmd"),
              Button.inline("История команд", b"shell_history")],
-            [Button.inline("Память и Саммари", b"mem_menu")],
+            [Button.inline("Память и Саммари", b"mem_menu"),
+             Button.inline("База стикеров", b"sticker_menu")],
             [Button.inline("Настройки", b"settings_menu")],
         ]
         return text, markup
@@ -181,6 +185,43 @@ def setup_handlers(bot, main_client):
             _clear_state(event.sender_id)
             _waiting_mem_clear_sums[event.sender_id] = True
             await event.edit("Отправь ID чата, @username или ссылку для удаления только саммари чата:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"sticker_menu":
+            _clear_state(event.sender_id)
+            text = (
+                "Управление базой стикеров\n\n"
+                "Выбери действие для просмотра, добавления или удаления стикеров:"
+            )
+            markup = [
+                [Button.inline("Просмотр стикеров", b"sticker_view")],
+                [Button.inline("Добавить стикер", b"sticker_add")],
+                [Button.inline("Удалить стикер", b"sticker_delete")],
+                [Button.inline("Назад в меню", b"main_menu")]
+            ]
+            await event.edit(text, buttons=markup)
+            await event.answer()
+
+        elif data == b"sticker_view":
+            from memory.sqlite import get_all_stickers
+            stickers = get_all_stickers()
+            if not stickers:
+                text = "База стикеров пуста."
+            else:
+                text = "Доступные стикеры в базе (ключевые слова):\n\n" + "\n".join(f"- {s}" for s in stickers)
+            await event.respond(text, buttons=[[Button.inline("Назад", b"sticker_menu")]])
+            await event.answer()
+
+        elif data == b"sticker_add":
+            _clear_state(event.sender_id)
+            _waiting_sticker_file[event.sender_id] = True
+            await event.edit("Отправь стикер, который хочешь добавить в базу:", buttons=[[Button.inline("Отмена", b"sticker_menu")]])
+            await event.answer()
+
+        elif data == b"sticker_delete":
+            _clear_state(event.sender_id)
+            _waiting_sticker_delete[event.sender_id] = True
+            await event.edit("Отправь ключевое слово стикера, который хочешь удалить из базы:", buttons=[[Button.inline("Отмена", b"sticker_menu")]])
             await event.answer()
 
         elif data == b"settings_menu":
@@ -758,6 +799,40 @@ def setup_handlers(bot, main_client):
                 from memory.sqlite import clear_chat_context
                 await handle_mem_action(target, _waiting_clear_context, clear_chat_context, "Контекст чата успешно очищен", "Ошибка очистки")
 
+            # Ожидание отправки стикера для добавления в БД
+            elif _waiting_sticker_file.get(event.sender_id):
+                if not event.message.sticker:
+                    await event.respond("Это не стикер. Пожалуйста, отправь стикер:", buttons=[[Button.inline("Отмена", b"sticker_menu")]])
+                    return
+                file_id = event.message.file.id
+                _waiting_sticker_file.pop(event.sender_id, None)
+                _waiting_sticker_desc[event.sender_id] = file_id
+                await event.respond("Стикер получен! Теперь отправь ключевое слово для этого стикера (например, 'смех'):", buttons=[[Button.inline("Отмена", b"sticker_menu")]])
+                return
+
+            # Ожидание описания стикера
+            elif _waiting_sticker_desc.get(event.sender_id):
+                description = (event.message.text or "").strip().lower()
+                if not description:
+                    return
+                file_id = _waiting_sticker_desc.pop(event.sender_id, None)
+                from memory.sqlite import save_sticker
+                save_sticker(file_id, description)
+                await event.respond(f"Стикер для ключевого слова '{description}' успешно сохранен в базу!", buttons=[[Button.inline("В меню стикеров", b"sticker_menu")]])
+                return
+
+            # Ожидание удаления стикера
+            elif _waiting_sticker_delete.get(event.sender_id):
+                description = (event.message.text or "").strip().lower()
+                if not description:
+                    return
+                _waiting_sticker_delete.pop(event.sender_id, None)
+                from memory.sqlite import delete_sticker
+                success = delete_sticker(description)
+                msg = f"Стикер с описанием '{description}' успешно удален из базы." if success else "Ошибка удаления стикера."
+                await event.respond(msg, buttons=[[Button.inline("В меню стикеров", b"sticker_menu")]])
+                return
+
 
 def _clear_state(user_id):
     _waiting_clear_context.pop(user_id, None)
@@ -767,6 +842,9 @@ def _clear_state(user_id):
     _waiting_mem_clear_all.pop(user_id, None)
     _waiting_mem_clear_msgs.pop(user_id, None)
     _waiting_mem_clear_sums.pop(user_id, None)
+    _waiting_sticker_file.pop(user_id, None)
+    _waiting_sticker_desc.pop(user_id, None)
+    _waiting_sticker_delete.pop(user_id, None)
     _waiting_shell_cmd.pop(user_id, None)
     _waiting_name.pop(user_id, None)
     _waiting_bio.pop(user_id, None)
