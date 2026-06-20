@@ -359,24 +359,27 @@ def register_handlers(client):
 
             if event.document and not (event.photo or event.sticker or event.voice or event.video_note or event.video):
                 if should_resp:
-                    caption = (event.message.text or "").lower()
-                    if "скилл" in caption or "skill" in caption or "защита" in caption:
+                    try:
                         doc_name = None
                         for attr in getattr(event.document, 'attributes', []):
                             if hasattr(attr, 'file_name'):
                                 doc_name = attr.file_name
                                 break
                         if not doc_name:
-                            doc_name = "unnamed_skill.md"
+                            doc_name = "document"
                         
-                        os.makedirs("skills", exist_ok=True)
-                        dest_path = os.path.join("skills", doc_name)
+                        os.makedirs("database/cache", exist_ok=True)
+                        dest_path = os.path.join("database/cache", doc_name)
                         file_path = await event.download_media(file=dest_path)
                         if file_path:
-                            if doc_name.endswith(".py"):
-                                from llm.tools import load_dynamic_skills
-                                load_dynamic_skills()
-                            event.message.text = f"[Загружен скилл: {doc_name}] {event.message.text or ''}".strip()
+                            caption = event.message.text or ""
+                            event.message.text = (
+                                f"[Файл: {file_path}. Ты можешь прочитать его содержимое с помощью read_file, "
+                                f"или скопировать его в папку 'skills' для добавления как навык с помощью write_file если тебя просит владелец.] "
+                                f"{caption}"
+                            ).strip()
+                    except Exception as de:
+                        logger.error(f"[Document] Ошибка скачивания: {de}")
 
             if not should_resp:
                 return
