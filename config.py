@@ -38,7 +38,12 @@ LLM_MODELS = [
 ]
 
 # Модели с поддержкой зрения (vision)
-VISION_MODELS = [
+_custom_vision_entry = (
+    ["custom/gemini-3.5-flash-low", "custom/gemini-3.1-flash-image"]
+    if CUSTOM_API_BASE_URL else []
+)
+
+VISION_MODELS = _custom_vision_entry + [
     "gemini/gemini-3.5-flash",   # Google Gemini — основной vision
     "runic/minimax-m3",
     "codexsale/gpt-4o",
