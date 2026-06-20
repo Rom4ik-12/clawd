@@ -234,8 +234,27 @@ async def ensure_static_image(file_path: str) -> str:
             logger.error(f"Ошибка конвертации WebM в JPG: {e}")
             
     elif is_gzip:
-        # TGS анимации не поддерживаются без специального рендерера
-        logger.warning(f"Анимированные стикеры TGS не поддерживаются для Vision: {file_path}")
+        # TGS — это Gzip-архив с Lottie JSON.
+        # Пробуем извлечь первый кадр с помощью lottie_convert.py
+        png_path = file_path + ".png"
+        try:
+            import sys
+            lottie_convert = os.path.join(os.path.dirname(sys.executable), "lottie_convert.py")
+            if not os.path.exists(lottie_convert):
+                lottie_convert = "lottie_convert.py"
+                
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, lottie_convert, file_path, png_path, '--frame', '1',
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            await proc.communicate()
+            if os.path.exists(png_path) and os.path.getsize(png_path) > 0:
+                os.remove(file_path)
+                return png_path
+        except Exception as e:
+            logger.error(f"Ошибка конвертации TGS в PNG: {e}")
+            
         if os.path.exists(file_path):
             os.remove(file_path)
         return None
