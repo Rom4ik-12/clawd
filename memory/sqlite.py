@@ -168,6 +168,34 @@ def clear_chat_context(chat_id):
         conn.close()
 
 
+def clear_chat_summaries(chat_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM summaries WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Ошибка очистки саммари {chat_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def clear_chat_messages(chat_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("DELETE FROM messages WHERE chat_id = ?", (chat_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"Ошибка очистки сообщений {chat_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def save_sticker(file_id, description):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()

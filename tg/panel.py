@@ -39,6 +39,12 @@ def init_panel_bot(main_client):
 
 # Состояния ввода
 _waiting_clear_context = {}
+_waiting_mem_view_msgs = {}
+_waiting_mem_view_sums = {}
+_waiting_mem_gen_sum = {}
+_waiting_mem_clear_all = {}
+_waiting_mem_clear_msgs = {}
+_waiting_mem_clear_sums = {}
 _waiting_shell_cmd = {}
 _waiting_name = {}
 _waiting_bio = {}
@@ -66,7 +72,7 @@ def setup_handlers(bot, main_client):
             [Button.inline("Системный статус", b"sys_status")],
             [Button.inline("Выполнить команду", b"shell_cmd"),
              Button.inline("История команд", b"shell_history")],
-            [Button.inline("Очистить контекст", b"clear_context")],
+            [Button.inline("Память и Саммари 🧠", b"mem_menu")],
             [Button.inline("Настройки", b"settings_menu")],
         ]
         return text, markup
@@ -123,14 +129,58 @@ def setup_handlers(bot, main_client):
             await event.respond(text, buttons=[[Button.inline("Назад", b"main_menu")]])
             await event.answer()
 
-        elif data == b"clear_context":
+        elif data == b"clear_context" or data == b"mem_menu":
             _clear_state(event.sender_id)
-            _waiting_clear_context[event.sender_id] = True
-            await event.edit(
-                "Очистить контекст\n\n"
-                "Отправь ID чата, @username или ссылку на человека/группу:",
-                buttons=[[Button.inline("Отмена", b"main_menu")]]
+            text = (
+                "🧠 Управление памятью чатов\n\n"
+                "Выбери действие для просмотра или очистки истории сообщений и саммари:"
             )
+            markup = [
+                [Button.inline("📝 Просмотр сообщений (История)", b"mem_view_msgs")],
+                [Button.inline("📋 Просмотр саммари", b"mem_view_sums")],
+                [Button.inline("⚡ Сгенерировать саммари сейчас", b"mem_gen_sum")],
+                [Button.inline("🧹 Очистить ВСЁ (сообщения + саммари)", b"mem_clear_all")],
+                [Button.inline("🗑️ Удалить только сообщения", b"mem_clear_msgs")],
+                [Button.inline("🗑️ Удалить только саммари", b"mem_clear_sums")],
+                [Button.inline("« Назад в меню", b"main_menu")]
+            ]
+            await event.edit(text, buttons=markup)
+            await event.answer()
+
+        elif data == b"mem_view_msgs":
+            _clear_state(event.sender_id)
+            _waiting_mem_view_msgs[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку на человека/группу для просмотра истории сообщений:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"mem_view_sums":
+            _clear_state(event.sender_id)
+            _waiting_mem_view_sums[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку для просмотра саммари:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"mem_gen_sum":
+            _clear_state(event.sender_id)
+            _waiting_mem_gen_sum[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку для принудительной генерации саммари:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"mem_clear_all":
+            _clear_state(event.sender_id)
+            _waiting_mem_clear_all[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку для полного удаления всей памяти (сообщения + саммари):", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"mem_clear_msgs":
+            _clear_state(event.sender_id)
+            _waiting_mem_clear_msgs[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку для удаления только истории сообщений чата:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
+            await event.answer()
+
+        elif data == b"mem_clear_sums":
+            _clear_state(event.sender_id)
+            _waiting_mem_clear_sums[event.sender_id] = True
+            await event.edit("Отправь ID чата, @username или ссылку для удаления только саммари чата:", buttons=[[Button.inline("Отмена", b"mem_menu")]])
             await event.answer()
 
         elif data == b"settings_menu":
@@ -589,15 +639,8 @@ def setup_handlers(bot, main_client):
             await event.respond(text, buttons=markup)
             return
 
-        # Очистка контекста
-        if _waiting_clear_context.get(event.sender_id):
-            target = (event.message.text or "").strip()
-            if not target:
-                return
-            _waiting_clear_context.pop(event.sender_id, None)
-
-            resolved_id = None
-            try:
+            async def resolve_chat_id(target):
+                resolved_id = None
                 if target.isdigit():
                     resolved_id = int(target)
                 elif target.lstrip('-').isdigit():
@@ -609,21 +652,121 @@ def setup_handlers(bot, main_client):
                 elif target.startswith("@"):
                     entity = await main_client.get_entity(target)
                     resolved_id = entity.id
-            except Exception as e:
-                await event.respond(
-                    f"Не удалось определить чат: {e}",
-                    buttons=[[Button.inline("Назад", b"main_menu")]]
-                )
-                return
+                return resolved_id
 
-            if resolved_id:
-                success = clear_chat_context(resolved_id)
-                msg = f"Контекст чата {resolved_id} очищен." if success else "Ошибка очистки."
-                await event.respond(msg, buttons=[[Button.inline("В меню", b"main_menu")]])
+            async def handle_mem_action(target_input, state_dict, action_func, success_msg, err_msg):
+                state_dict.pop(event.sender_id, None)
+                try:
+                    resolved_id = await resolve_chat_id(target_input)
+                    if resolved_id:
+                        success = action_func(resolved_id)
+                        msg = f"{success_msg} ({resolved_id})" if success else err_msg
+                        await event.respond(msg, buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                    else:
+                        await event.respond("Чат не найден", buttons=[[Button.inline("Назад", b"mem_menu")]])
+                except Exception as e:
+                    await event.respond(f"Ошибка: {e}", buttons=[[Button.inline("Назад", b"mem_menu")]])
+
+            # Просмотр истории сообщений
+            if _waiting_mem_view_msgs.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                _waiting_mem_view_msgs.pop(event.sender_id, None)
+                try:
+                    resolved_id = await resolve_chat_id(target)
+                    if resolved_id:
+                        from memory.sqlite import get_short_memory
+                        msgs = get_short_memory(resolved_id, limit=20)
+                        if not msgs:
+                            text = f"История сообщений для {resolved_id} пуста."
+                        else:
+                            text = f"Последние 20 сообщений для {resolved_id}:\n\n" + "\n".join(f"- {m}" for m in msgs)
+                        await event.respond(text, buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                    else:
+                        await event.respond("Чат не найден", buttons=[[Button.inline("Назад", b"mem_menu")]])
+                except Exception as e:
+                    await event.respond(f"Ошибка: {e}", buttons=[[Button.inline("Назад", b"mem_menu")]])
+
+            # Просмотр саммари
+            elif _waiting_mem_view_sums.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                _waiting_mem_view_sums.pop(event.sender_id, None)
+                try:
+                    resolved_id = await resolve_chat_id(target)
+                    if resolved_id:
+                        from memory.sqlite import get_summaries
+                        sums = get_summaries(resolved_id, limit=5)
+                        if not sums:
+                            text = f"Саммари для {resolved_id} отсутствует."
+                        else:
+                            text = f"Саммари диалога {resolved_id}:\n\n" + "\n\n".join(f"• {s}" for s in sums)
+                        await event.respond(text, buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                    else:
+                        await event.respond("Чат не найден", buttons=[[Button.inline("Назад", b"mem_menu")]])
+                except Exception as e:
+                    await event.respond(f"Ошибка: {e}", buttons=[[Button.inline("Назад", b"mem_menu")]])
+
+            # Принудительная генерация саммари
+            elif _waiting_mem_gen_sum.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                _waiting_mem_gen_sum.pop(event.sender_id, None)
+                try:
+                    resolved_id = await resolve_chat_id(target)
+                    if resolved_id:
+                        from memory.sqlite import get_short_memory
+                        from memory.summarizer import summarize_chat_history
+                        short = get_short_memory(resolved_id, 100)
+                        if not short:
+                            await event.respond("Недостаточно сообщений для генерации саммари.", buttons=[[Button.inline("Назад", b"mem_menu")]])
+                            return
+                        await event.respond("Запускаю генерацию саммари...")
+                        await summarize_chat_history(resolved_id, short, OWNER_ID)
+                        await event.respond("Саммари успешно сгенерировано и обновлено в БД!", buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                    else:
+                        await event.respond("Чат не найден", buttons=[[Button.inline("Назад", b"mem_menu")]])
+                except Exception as e:
+                    await event.respond(f"Ошибка генерации саммари: {e}", buttons=[[Button.inline("Назад", b"mem_menu")]])
+
+            # Полное удаление памяти
+            elif _waiting_mem_clear_all.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                from memory.sqlite import clear_chat_context
+                await handle_mem_action(target, _waiting_mem_clear_all, clear_chat_context, "Вся память успешно удалена", "Ошибка удаления памяти")
+
+            # Удаление только сообщений
+            elif _waiting_mem_clear_msgs.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                from memory.sqlite import clear_chat_messages
+                await handle_mem_action(target, _waiting_mem_clear_msgs, clear_chat_messages, "История сообщений успешно удалена", "Ошибка удаления истории")
+
+            # Удаление только саммари
+            elif _waiting_mem_clear_sums.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target: return
+                from memory.sqlite import clear_chat_summaries
+                await handle_mem_action(target, _waiting_mem_clear_sums, clear_chat_summaries, "Все саммари успешно удалены", "Ошибка удаления саммари")
+
+            # Очистка старого контекста (для совместимости)
+            elif _waiting_clear_context.get(event.sender_id):
+                target = (event.message.text or "").strip()
+                if not target:
+                    return
+                from memory.sqlite import clear_chat_context
+                await handle_mem_action(target, _waiting_clear_context, clear_chat_context, "Контекст чата успешно очищен", "Ошибка очистки")
 
 
 def _clear_state(user_id):
     _waiting_clear_context.pop(user_id, None)
+    _waiting_mem_view_msgs.pop(user_id, None)
+    _waiting_mem_view_sums.pop(user_id, None)
+    _waiting_mem_gen_sum.pop(user_id, None)
+    _waiting_mem_clear_all.pop(user_id, None)
+    _waiting_mem_clear_msgs.pop(user_id, None)
+    _waiting_mem_clear_sums.pop(user_id, None)
     _waiting_shell_cmd.pop(user_id, None)
     _waiting_name.pop(user_id, None)
     _waiting_bio.pop(user_id, None)
