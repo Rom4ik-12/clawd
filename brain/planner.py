@@ -76,8 +76,25 @@ async def should_respond(event) -> bool:
         sender = await event.get_sender()
         sender_id = sender.id if sender else 0
 
-        # Не отвечаем на свои сообщения (кроме Избранного)
-        if event.out and event.chat_id != sender_id:
+        # Свой ID бота
+        me_id = getattr(event.client, 'me_id', None)
+        me_username = getattr(event.client, 'me_username', '')
+        me_first_name = getattr(event.client, 'me_first_name', "Claw'd")
+
+        if not me_id:
+            try:
+                me = await event.client.get_me()
+                me_id = me.id
+                event.client.me_id = me_id
+                me_username = getattr(me, 'username', '') or ''
+                event.client.me_username = me_username
+                me_first_name = getattr(me, 'first_name', '') or "Claw'd"
+                event.client.me_first_name = me_first_name
+            except Exception:
+                pass
+
+        # Не отвечаем на свои сообщения (кроме Избранного — где chat_id == me_id)
+        if event.out and event.chat_id != me_id:
             return False
 
         # Каналы — не отвечаем (обрабатываются отдельно)
@@ -96,32 +113,31 @@ async def should_respond(event) -> bool:
                 or getattr(sender, 'username', 'Пользователь')
             )
 
-        me_id = getattr(event.client, 'me_id', None)
-        me_username = getattr(event.client, 'me_username', '')
-        me_first_name = getattr(event.client, 'me_first_name', "Claw'd")
-
-        if not me_id:
-            try:
-                me = await event.client.get_me()
-                me_id = me.id
-                me_username = getattr(me, 'username', '') or ''
-                me_first_name = getattr(me, 'first_name', '') or "Claw'd"
-            except Exception:
-                pass
-
         # Проверяем явное упоминание
+        import re
         msg_text = (event.message.text or "").lower()
         from memory.sqlite import get_setting
         bot_trigger = get_setting("bot_trigger", "")
-        
+
         mentioned = False
+
+        # 1. Точное совпадение @username
         if me_username and f"@{me_username.lower()}" in msg_text:
             mentioned = True
-        elif me_first_name and me_first_name.lower() in msg_text:
+
+        # 2. Если в сообщении есть любой @упоминание — не трогаем нас,
+        #    только если среди них нет нашего юзернейма (уже проверили выше)
+        elif re.search(r'@\w+', msg_text):
+            mentioned = False  # Кто-то другой упомянут, не мы
+
+        # 3. Имя бота как отдельное слово (word boundary, не подстрока)
+        elif me_first_name and re.search(r'\b' + re.escape(me_first_name.lower()) + r'\b', msg_text):
             mentioned = True
-        elif bot_trigger:
+
+        # 4. Кастомные триггеры (тоже по границам слова)
+        if not mentioned and bot_trigger:
             triggers = [t.strip().lower() for t in bot_trigger.split(",") if t.strip()]
-            if any(t in msg_text for t in triggers):
+            if any(re.search(r'\b' + re.escape(t) + r'\b', msg_text) for t in triggers):
                 mentioned = True
 
         # Проверяем ответ на наше сообщение
