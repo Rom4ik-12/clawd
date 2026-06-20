@@ -94,6 +94,7 @@ async def generate_response(prompt: str, is_vision: bool = False,
         models = [primary] + [m for m in models if m != primary]
 
     if is_vision and image_url:
+        logger.info(f"Vision request: prompt_len={len(prompt)}, image_url_len={len(image_url)}, prefix={image_url[:60]}... suffix={image_url[-20:] if len(image_url) > 20 else ''}")
         messages = [{
             "role": "user",
             "content": [
