@@ -17,8 +17,11 @@ def filter_response(text: str, last_msg: str = None) -> str:
     if not text:
         return text
 
-    # Убираем эмодзи и текстовые смайлы
-    text = re.sub(r'[\U00010000-\U0010ffff]', '', text)
+    # Убираем эмодзи и текстовые смайлы (включая сердечки, значки и вариативные селекторы)
+    text = re.sub(
+        r'[\u2600-\u27BF]|[\u2B50-\u2B55]|[\U00010000-\U0010FFFF]|[\uFE00-\uFE0F]',
+        '', text
+    )
     text = re.sub(r'[:=;]-[)D(O/|\\Pdp*]|[:=;][)D(O/|\\Pdp*]', '', text)
 
     # Убираем артефакты markdown которые не нужны в TG
