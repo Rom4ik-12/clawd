@@ -18,10 +18,10 @@ async def build_context(chat_id: int, sender_id: int, sender_name: str, message:
     update_relationship_on_message(sender_id, sender_name, message)
 
     # Последние сообщения
-    short = get_short_memory(chat_id, 30)
+    short = get_short_memory(chat_id, 100)
 
     # Запускаем суммаризацию если история длинная
-    if len(short) >= 20:
+    if len(short) >= 80:
         asyncio.create_task(summarize_chat_history(chat_id, short, sender_id))
 
     # Векторная память
