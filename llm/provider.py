@@ -5,7 +5,8 @@ from openai import AsyncOpenAI
 from config import (
     OPENROUTER_API_KEY, CODEXSALE_API_KEY, RUNIC_API_KEY,
     CUSTOM_API_KEY, CUSTOM_API_BASE_URL,
-    LLM_MODELS, VISION_MODELS, STT_MODEL
+    LLM_MODELS, VISION_MODELS, STT_MODEL,
+    GEMINI_API_KEY
 )
 import asyncio
 import logging
@@ -31,6 +32,13 @@ runic_client = AsyncOpenAI(
     max_retries=0,
 )
 
+# Google Gemini — OpenAI-совместимый эндпоинт
+gemini_client = AsyncOpenAI(
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=GEMINI_API_KEY or "dummy",
+    max_retries=0,
+)
+
 # Кастомный OpenAI-совместимый провайдер (LMStudio, Ollama, Groq, Together и т.д.)
 custom_client = AsyncOpenAI(
     base_url=CUSTOM_API_BASE_URL or "http://localhost:11434/v1",
@@ -43,7 +51,11 @@ FATAL_ERROR_CODES = {401, 403}
 
 def _get_client_and_model(model: str):
     """Возвращает (client, real_model_id) по префиксу модели."""
-    if model.startswith("custom/"):
+    if model.startswith("gemini/"):
+        if not GEMINI_API_KEY:
+            raise ValueError("gemini API key is not configured")
+        return gemini_client, model[len("gemini/"):]
+    elif model.startswith("custom/"):
         real_model = model[len("custom/"):]
         if custom_client is None or not CUSTOM_API_KEY:
             logger.warning("custom_client не настроен (CUSTOM_API_BASE_URL или CUSTOM_API_KEY пуст), пропускаем")

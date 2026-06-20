@@ -11,6 +11,7 @@ OWNER_NAME = os.getenv("OWNER_NAME", "Владелец")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 CODEXSALE_API_KEY = os.getenv("CODEXSALE_API_KEY", "")
 RUNIC_API_KEY = os.getenv("RUNIC_API_KEY", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 # ─── Custom OpenAI-compatible API ─────────────────────────────────────────────
 # Любой OpenAI-совместимый эндпоинт: LMStudio, Ollama, Together, Groq и т.д.
@@ -38,11 +39,9 @@ LLM_MODELS = [
 
 # Модели с поддержкой зрения (vision)
 VISION_MODELS = [
+    "gemini/gemini-2.0-flash",   # Google Gemini — основной vision
     "runic/minimax-m3",
     "codexsale/gpt-4o",
-    "nvidia/nemotron-nano-12b-v2-vl:free",
-    "moonshotai/kimi-k2.6:free",
-    "google/gemma-3-27b-it:free",
 ]
 
 # STT — транскрибация аудио
