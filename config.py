@@ -38,11 +38,8 @@ LLM_MODELS = [
 
 # Модели с поддержкой зрения (vision)
 VISION_MODELS = [
-    "codexsale/gpt-5.5",
-    "codexsale/gpt-5.4",
-    "codexsale/gpt-5.4-mini",
+    "runic/minimax-m3",
     "codexsale/gpt-4o",
-    "codexsale/claude-3-5-sonnet",
     "nvidia/nemotron-nano-12b-v2-vl:free",
     "moonshotai/kimi-k2.6:free",
     "google/gemma-3-27b-it:free",
