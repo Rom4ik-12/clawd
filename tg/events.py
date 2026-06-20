@@ -219,6 +219,20 @@ def register_handlers(client):
                     logger.warning(f"Could not fetch owner entity on startup: {e}")
                     client.owner_username = ''
 
+            # Автоматический сбор (коллекционирование) стикеров, которые видит бот
+            if event.sticker:
+                try:
+                    emoji = None
+                    for attr in getattr(event.sticker, 'attributes', []):
+                        if hasattr(attr, 'alt') and attr.alt:
+                            emoji = attr.alt
+                            break
+                    if emoji:
+                        from memory.sqlite import save_sticker
+                        save_sticker(event.message.file.id, emoji)
+                except Exception as st_err:
+                    logger.debug(f"Ошибка автосбора стикера: {st_err}")
+
             msg_text = (event.message.text or "").strip()
 
             # ─── Юзербот-команды (перехватываем исходящие) ───────────────────
