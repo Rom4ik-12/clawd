@@ -12,6 +12,7 @@ from telethon import events
 from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
+from telethon.errors import ChannelPrivateError, ChatWriteForbiddenError
 
 from brain.planner import should_respond
 from brain.think import generate_thought
@@ -135,6 +136,9 @@ async def execute_pending_actions(client, event, pending_actions: list):
                 from internet.telegram_reader import leave_channel
                 result = await leave_channel(client, args.get("channel", ""))
                 logger.info(f"➖ [Agent] {result}")
+                if result.startswith("✅"):
+                    logger.info(f"➖ [Agent] Бот вышел из чата, остальные действия отменены")
+                    return
 
             elif name == "click_button":
                 idx = args.get("index")
@@ -438,7 +442,30 @@ def register_handlers(client):
                             media_type = "Фото" if event.photo else "Стикер"
                             event.message.text = f"[{media_type}] {caption}".strip()
 
-            if event.voice or event.video_note:
+            if event.voice:
+                if should_resp:
+                    file_path = await event.download_media(file="database/cache/")
+                    if file_path and os.path.exists(file_path):
+                        try:
+                            with open(file_path, "rb") as af:
+                                audio_bytes = af.read()
+                            os.remove(file_path)
+
+                            from llm.provider import transcribe_audio
+                            async with client.action(event.chat_id, 'record-audio'):
+                                transcription = await transcribe_audio(audio_bytes, "ogg")
+
+                            if transcription:
+                                logger.info(f"🎙️ [Voice] Расшифровано: {transcription}")
+                                caption = event.message.text or ""
+                                event.message.text = f"[Голосовое: {transcription}] {caption}".strip()
+                            else:
+                                event.message.text = "[Голосовое сообщение (не удалось расшифровать)]"
+                        except Exception as e:
+                            logger.error(f"[Voice] Ошибка обработки голосового: {e}")
+                            event.message.text = "[Голосовое сообщение (ошибка обработки)]"
+
+            if event.video_note:
                 if should_resp:
                     file_path = await event.download_media(file="database/cache/")
                     if file_path:
@@ -461,16 +488,16 @@ def register_handlers(client):
                                 transcription = await transcribe_audio(audio_bytes, "wav")
 
                             if transcription:
-                                logger.info(f"🎙️ [Voice] Расшифровано: {transcription}")
+                                logger.info(f"🎥 [VideoNote] Расшифровано: {transcription}")
                                 caption = event.message.text or ""
-                                event.message.text = f"[Голосовое: {transcription}] {caption}".strip()
+                                event.message.text = f"[Видеосообщение: {transcription}] {caption}".strip()
                             else:
-                                event.message.text = "[Голосовое сообщение (не удалось расшифровать)]"
+                                event.message.text = "[Видеосообщение (не удалось расшифровать)]"
                         else:
                             if os.path.exists(file_path):
                                 os.remove(file_path)
 
-            if event.video and not event.video_note:
+            if event.video and not event.video_note and not event.sticker:
                 if should_resp:
                     try:
                         file_path = await event.download_media(file="database/cache/")
@@ -526,18 +553,30 @@ def register_handlers(client):
                 await client(UpdateStatusRequest(offline=False))
             except Exception:
                 pass
-            await client.send_read_acknowledge(event.chat_id, event.message)
+            try:
+                await client.send_read_acknowledge(event.chat_id, event.message)
+            except (ChannelPrivateError, ChatWriteForbiddenError):
+                logger.info(f"➖ [Events] Не удалось отметить прочитанным в чате {event.chat_id}: бот вышел")
+                return
 
             # Агентный цикл
-            async with client.action(event.chat_id, 'typing'):
-                response, pending_actions = await generate_thought(event, image_url=image_url)
+            try:
+                async with client.action(event.chat_id, 'typing'):
+                    response, pending_actions = await generate_thought(event, image_url=image_url)
+            except (ChannelPrivateError, ChatWriteForbiddenError):
+                logger.info(f"➖ [Events] Бот вышел из чата {event.chat_id}, пропускаю ответ")
+                return
 
             if response:
                 await asyncio.sleep(random.uniform(0.5, 2.0))
                 reply_id = event.message.id if not event.is_private else None
-                await send_message(client, event.chat_id, response, reply_to=reply_id)
-                save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
-                logger.info(f"📤 [Response]: {response[:100]}")
+                try:
+                    await send_message(client, event.chat_id, response, reply_to=reply_id)
+                    save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                    logger.info(f"📤 [Response]: {response[:100]}")
+                except (ChannelPrivateError, ChatWriteForbiddenError):
+                    logger.info(f"➖ [Events] Не удалось отправить ответ в чат {event.chat_id}: бот вышел")
+                    return
 
             if pending_actions:
                 await asyncio.sleep(0.3)

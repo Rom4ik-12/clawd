@@ -3,7 +3,9 @@ internet/telegram_reader.py — Telegram action tools (join, leave, feed, inspec
 """
 import asyncio
 from telethon.tl.functions.channels import JoinChannelRequest, LeaveChannelRequest
-from telethon.tl.types import Channel, Chat, User
+from telethon.tl.functions.messages import DeleteChatUserRequest
+from telethon.tl.types import Channel, Chat, User, InputUserSelf
+from telethon.errors import UserNotParticipantError, ChannelPrivateError
 
 
 async def join_channel(client, channel_username_or_link: str) -> str:
@@ -45,14 +47,38 @@ async def join_channel(client, channel_username_or_link: str) -> str:
 
 
 async def leave_channel(client, channel_username_or_link: str) -> str:
-    """Выйти из канала или группы."""
+    """Выйти из канала, супергруппы или обычной группы."""
     try:
         target = channel_username_or_link.strip()
         if target.startswith("https://t.me/"):
             target = target.replace("https://t.me/", "")
+        if target.startswith("@"):
+            target = target[1:]
+
         entity = await client.get_entity(target)
-        await client(LeaveChannelRequest(entity))
-        return f"✅ Вышел из @{target}"
+
+        if isinstance(entity, User):
+            return f"❌ Нельзя 'выйти' из личного чата с {channel_username_or_link}. Можно только заблокировать."
+
+        if isinstance(entity, Channel):
+            await client(LeaveChannelRequest(entity))
+            name = getattr(entity, 'username', None) or getattr(entity, 'title', target)
+            return f"✅ Вышел из @{name}"
+
+        if isinstance(entity, Chat):
+            await client(DeleteChatUserRequest(
+                chat_id=entity.id,
+                user_id=InputUserSelf()
+            ))
+            name = getattr(entity, 'title', target)
+            return f"✅ Вышел из группы '{name}'"
+
+        return f"❌ Неизвестный тип чата для {channel_username_or_link}"
+
+    except UserNotParticipantError:
+        return f"⚠️ Уже не состою в {channel_username_or_link}"
+    except ChannelPrivateError:
+        return f"❌ Нет доступа к {channel_username_or_link}: канал приватный или меня заблокировали"
     except Exception as e:
         return f"❌ Не удалось выйти из {channel_username_or_link}: {e}"
 

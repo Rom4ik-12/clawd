@@ -39,7 +39,7 @@ LLM_MODELS = [
 
 # Модели с поддержкой зрения (vision)
 _custom_vision_entry = (
-    ["custom/gemini-3.5-flash-low", "custom/gemini-3.1-flash-image"]
+    ["custom/gemini-3-flash", "custom/claude-sonnet-4-6", "custom/gemini-3.5-flash-low"]
     if CUSTOM_API_BASE_URL else []
 )
 

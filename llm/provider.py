@@ -94,7 +94,7 @@ async def generate_response(prompt: str, is_vision: bool = False,
         models = [primary] + [m for m in models if m != primary]
 
     if is_vision and image_url:
-        logger.info(f"Vision request: prompt_len={len(prompt)}, image_url_len={len(image_url)}, prefix={image_url[:60]}... suffix={image_url[-20:] if len(image_url) > 20 else ''}")
+        logger.info(f"Vision request: prompt_len={len(prompt)}, image_url_len={len(image_url)}, models={models}, prefix={image_url[:60]}... suffix={image_url[-20:] if len(image_url) > 20 else ''}")
         messages = [{
             "role": "user",
             "content": [
@@ -108,21 +108,28 @@ async def generate_response(prompt: str, is_vision: bool = False,
     last_error = None
     for model in models:
         try:
+            logger.info(f"🤖 Trying model: {model}...")
             client, real_model = _get_client_and_model(model)
             response = await client.chat.completions.create(
                 model=real_model,
                 messages=messages,
                 temperature=temperature,
             )
+            logger.info(f"Response from {model} received. Type of response: {type(response)}")
+            if not response.choices:
+                logger.warning(f"⚠️ Модель {model} вернула пустой список choices. Response: {response}")
+                continue
             content = response.choices[0].message.content
             if content:
-                logger.debug(f"✅ Модель {model} ответила")
+                logger.info(f"✅ Модель {model} успешно ответила: {content[:150]}...")
                 return content
             else:
-                logger.warning(f"⚠️ Модель {model} вернула пустой ответ")
+                logger.warning(f"⚠️ Модель {model} вернула пустой content. Response: {response}")
                 continue
         except Exception as e:
-            logger.warning(f"Model {model} failed: {str(e)[:120]}")
+            logger.warning(f"❌ Model {model} failed: {str(e)}")
+            import traceback
+            logger.warning(f"Traceback for {model}: {traceback.format_exc()}")
             last_error = e
             if hasattr(e, 'status_code') and e.status_code in FATAL_ERROR_CODES:
                 logger.error(f"❌ Фатальная ошибка {e.status_code} для {model}")
@@ -185,40 +192,71 @@ async def generate_with_tools(messages: list, tools: list, temperature: float = 
     raise RuntimeError(f"All models failed. Last error: {last_error}")
 
 
-async def transcribe_audio(audio_bytes: bytes, audio_format: str = "wav") -> str | None:
-    """Транскрибация аудио через OpenAI-совместимый API."""
+def _extract_transcription_text(response) -> str | None:
+    """Извлекает текст из разных форматов ответа Whisper API."""
+    if response is None:
+        return None
+    if isinstance(response, str):
+        text = response.strip()
+        return text if text else None
+    text = getattr(response, "text", None)
+    if text:
+        return str(text).strip()
+    if isinstance(response, dict):
+        text = response.get("text")
+        if text:
+            return str(text).strip()
+    return None
+
+
+async def _try_transcribe(client, audio_bytes: bytes, audio_format: str, model: str, response_format: str):
+    """Одна попытка транскрибации."""
+    audio_file = io.BytesIO(audio_bytes)
+    audio_file.name = f"audio.{audio_format}"
+    response = await client.audio.transcriptions.create(
+        model=model,
+        file=audio_file,
+        language="ru",
+        response_format=response_format,
+    )
+    return _extract_transcription_text(response)
+
+
+async def transcribe_audio(audio_bytes: bytes, audio_format: str = "ogg") -> str | None:
+    """Транскрибация аудио через OpenAI-совместимый API.
+
+    Запускает несколько провайдеров параллельно и возвращает первый
+    непустой результат. Telegram voice = OGG Opus, отправляем как есть.
+    """
     real_model = STT_MODEL.replace("openai/", "")
 
-    # Пробуем codexsale
-    try:
-        audio_file = io.BytesIO(audio_bytes)
-        audio_file.name = f"audio.{audio_format}"
-        response = await codexsale_client.audio.transcriptions.create(
-            model=real_model,
-            file=audio_file,
-            language="ru",
-            response_format="text",
-        )
-        result = response.strip() if isinstance(response, str) else str(response).strip()
+    tasks = []
+    names = []
+
+    # Основной STT-провайдер
+    if CODEXSALE_API_KEY:
+        tasks.append(_try_transcribe(codexsale_client, audio_bytes, audio_format, real_model, "json"))
+        names.append("codexsale")
+
+    # Фолбэк на OpenRouter Whisper
+    if OPENROUTER_API_KEY:
+        tasks.append(_try_transcribe(openrouter_client, audio_bytes, audio_format, "openai/whisper-large-v3", "json"))
+        names.append("openrouter")
+
+    if not tasks:
+        logger.error("[STT] Нет настроенных STT-провайдеров")
+        return None
+
+    logger.info(f"[STT] Parallel transcription start ({', '.join(names)}), format={audio_format}, size={len(audio_bytes)} bytes")
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for name, result in zip(names, results):
+        if isinstance(result, Exception):
+            logger.warning(f"[STT] {name} failed: {result}")
+            continue
         if result:
+            logger.info(f"[STT] ✅ {name} result: {result[:100]}...")
             return result
-    except Exception as e:
-        logger.warning(f"[STT] codexsale failed: {e}, trying openrouter whisper...")
 
-    # Фолбэк: openrouter whisper
-    try:
-        audio_file2 = io.BytesIO(audio_bytes)
-        audio_file2.name = f"audio.{audio_format}"
-        response2 = await openrouter_client.audio.transcriptions.create(
-            model="openai/whisper-large-v3",
-            file=audio_file2,
-            language="ru",
-            response_format="text",
-        )
-        result2 = response2.strip() if isinstance(response2, str) else str(response2).strip()
-        if result2:
-            return result2
-    except Exception as e2:
-        logger.error(f"[STT] All STT failed: {e2}")
-
+    logger.error("[STT] All STT providers returned empty/failed")
     return None
