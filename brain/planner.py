@@ -125,16 +125,30 @@ async def should_respond(event) -> bool:
         if me_username and f"@{me_username.lower()}" in msg_text:
             mentioned = True
 
-        # 2. Если в сообщении есть любой @упоминание — не трогаем нас,
-        #    только если среди них нет нашего юзернейма (уже проверили выше)
-        elif re.search(r'@\w+', msg_text):
+        # 2. Username без @ как отдельное слово (например «xclawd» без собачки)
+        if not mentioned and me_username:
+            if re.search(r'\b' + re.escape(me_username.lower()) + r'\b', msg_text):
+                mentioned = True
+
+        # 3. Если в сообщении есть любой @упоминание — это не нам,
+        #    только если наш юзернейм уже не найден выше
+        if not mentioned and re.search(r'@\w+', msg_text):
             mentioned = False  # Кто-то другой упомянут, не мы
 
-        # 3. Имя бота как отдельное слово (word boundary, не подстрока)
-        elif me_first_name and re.search(r'\b' + re.escape(me_first_name.lower()) + r'\b', msg_text):
-            mentioned = True
+        # 4. Имя бота как отдельное слово (word boundary, не подстрока)
+        #    Ищем и оригинальное имя, и без апострофа (Claw'd → clawd)
+        if not mentioned and me_first_name:
+            name_variants = {me_first_name.lower()}
+            # Вариант без апострофа и спецсимволов
+            name_clean = re.sub(r"[^a-zа-яё0-9]", "", me_first_name.lower())
+            if name_clean:
+                name_variants.add(name_clean)
+            for name_var in name_variants:
+                if re.search(r'(?<![\w@])' + re.escape(name_var) + r'(?![\w])', msg_text):
+                    mentioned = True
+                    break
 
-        # 4. Кастомные триггеры (тоже по границам слова)
+        # 5. Кастомные триггеры (тоже по границам слова)
         if not mentioned and bot_trigger:
             triggers = [t.strip().lower() for t in bot_trigger.split(",") if t.strip()]
             if any(re.search(r'\b' + re.escape(t) + r'\b', msg_text) for t in triggers):
