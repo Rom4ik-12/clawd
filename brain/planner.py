@@ -12,6 +12,14 @@ _last_response = {}
 MIN_INTERVAL = 2  # секунды
 
 
+async def _get_reply_msg(event):
+    """Безопасно получает reply-сообщение (Telethon иногда возвращает TotalList)."""
+    reply_msg = await event.get_reply_message()
+    if isinstance(reply_msg, (list, tuple)) and reply_msg:
+        return reply_msg[0]
+    return reply_msg
+
+
 async def decide_with_llm(event, sender_name: str, me_name: str) -> bool:
     """Запрашивает быстрое решение у LLM, нужно ли отвечать на сообщение."""
     try:
@@ -24,7 +32,7 @@ async def decide_with_llm(event, sender_name: str, me_name: str) -> bool:
         # Получаем информацию о реплае на сообщение
         reply_to_str = ""
         if event.message.is_reply:
-            reply_msg = await event.get_reply_message()
+            reply_msg = await _get_reply_msg(event)
             if reply_msg:
                 reply_sender = await reply_msg.get_sender()
                 if reply_sender:
@@ -157,7 +165,7 @@ async def should_respond(event) -> bool:
         # Проверяем ответ на наше сообщение
         is_reply_to_me = False
         if event.message.is_reply:
-            reply_msg = await event.get_reply_message()
+            reply_msg = await _get_reply_msg(event)
             if reply_msg:
                 reply_sender = await reply_msg.get_sender()
                 if reply_sender and me_id and reply_sender.id == me_id:
