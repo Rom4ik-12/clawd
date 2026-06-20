@@ -4,6 +4,7 @@ brain/think.py — Агентный цикл Clawd
 """
 import json
 import logging
+import sys
 from llm.provider import generate_with_tools, generate_response
 from llm.prompts import get_chat_prompt
 from llm.tools import AGENT_TOOLS, execute_local_tool

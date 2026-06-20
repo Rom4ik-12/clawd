@@ -591,6 +591,7 @@ def execute_local_tool(name: str, args: dict):
     return None  # не локальный инструмент
 
 
+import os
 import importlib.util
 
 DYNAMIC_SKILLS = {}
