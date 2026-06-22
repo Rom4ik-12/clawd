@@ -277,13 +277,18 @@ async def analyze_and_save_sticker_async(client, event):
         if not file_path:
             return
         
+        ext = os.path.splitext(file_path)[1].lower()
+        mime_type = "image/jpeg"
+        if ext == ".png": mime_type = "image/png"
+        elif ext == ".webp": mime_type = "image/webp"
+
         with open(file_path, "rb") as f:
             b64_data = base64.b64encode(f.read()).decode('utf-8')
         
         if os.path.exists(file_path):
             os.remove(file_path)
             
-        image_url = f"data:image/jpeg;base64,{b64_data}"
+        image_url = f"data:{mime_type};base64,{b64_data}"
         
         prompt = (
             "Ты — ИИ-аналитик стикеров. Опиши этот стикер кратко, 1-3 словами или ключевыми тегами на русском языке. "
@@ -434,10 +439,15 @@ def register_handlers(client):
                     if file_path:
                         file_path = await ensure_static_image(file_path)
                         if file_path:
+                            ext = os.path.splitext(file_path)[1].lower()
+                            mime_type = "image/jpeg"
+                            if ext == ".png": mime_type = "image/png"
+                            elif ext == ".webp": mime_type = "image/webp"
+
                             with open(file_path, "rb") as f:
                                 b64 = base64.b64encode(f.read()).decode('utf-8')
                             os.remove(file_path)
-                            image_url = f"data:image/jpeg;base64,{b64}"
+                            image_url = f"data:{mime_type};base64,{b64}"
                             caption = event.message.text or ""
                             media_type = "Фото" if event.photo else "Стикер"
                             event.message.text = f"[{media_type}] {caption}".strip()
@@ -586,6 +596,9 @@ def register_handlers(client):
             logger.info(f"📥 Запрос для чата {event.chat_id} был отменен новым сообщением")
             raise
         except Exception as e:
+            if "TypeNotFoundError" in str(type(e)) or "Could not find a matching Constructor ID" in str(e):
+                logger.warning(f"⚠️ Игнорируем ошибку парсинга Telethon: {e}")
+                return
             import traceback
             logger.error(f"🔥 ОШИБКА В EVENTS.PY: {e}")
             traceback.print_exc()
