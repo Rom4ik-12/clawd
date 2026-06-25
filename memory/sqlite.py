@@ -196,6 +196,19 @@ def clear_chat_messages(chat_id):
         conn.close()
 
 
+def get_sticker(file_id):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT description FROM stickers WHERE file_id = ?", (file_id,))
+        row = c.fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def save_sticker(file_id, description):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
