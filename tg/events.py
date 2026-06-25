@@ -200,6 +200,38 @@ async def execute_pending_actions(client, event, pending_actions: list):
                 if file_id:
                     await client.send_file(event.chat_id, file_id)
 
+            elif name == "analyze_sticker_set":
+                if event.sender_id != OWNER_ID:
+                    logger.warning(f"❌ Пользователь {event.sender_id} попытался запустить анализ стикерпака!")
+                    from tg.sender import send_message
+                    await send_message(client, event.chat_id, "❌ Эта функция доступна только владельцу.")
+                    continue
+                    
+                short_name = args.get("short_name", "")
+                
+                input_set = None
+                if event.message.is_reply:
+                    reply_msg = await event.message.get_reply_message()
+                    if reply_msg and reply_msg.sticker:
+                        from telethon.tl.types import DocumentAttributeSticker
+                        for attr in getattr(reply_msg.sticker, 'attributes', []):
+                            if isinstance(attr, DocumentAttributeSticker):
+                                input_set = attr.stickerset
+                                break
+                
+                if short_name and not input_set:
+                    from telethon.tl.types import InputStickerSetShortName
+                    input_set = InputStickerSetShortName(short_name=short_name)
+                    
+                if not input_set:
+                    from tg.sender import send_message
+                    await send_message(client, event.chat_id, "❌ Не удалось определить стикерпак. Сделай reply на стикер или укажи short_name.")
+                    continue
+                    
+                from tg.sender import send_message
+                await send_message(client, event.chat_id, "⏳ Начинаю фоновый анализ стикерпака. Это займёт некоторое время.")
+                asyncio.create_task(analyze_full_sticker_set_background(client, input_set, event.chat_id))
+
         except Exception as e:
             logger.warning(f"⚠️ [Agent] Ошибка действия {name}: {e}")
 
@@ -314,6 +346,86 @@ async def analyze_and_save_sticker_async(client, event):
     except Exception as e:
         logger.warning(f"Ошибка при анализе стикера через Vision: {e}")
 
+async def analyze_full_sticker_set_background(client, input_set, chat_id):
+    try:
+        from tg.sender import send_message
+        from telethon.tl.functions.messages import GetStickerSetRequest
+        from telethon.tl.types import DocumentAttributeSticker
+        from llm.provider import generate_response
+        from memory.sqlite import save_sticker, get_sticker
+        
+        sticker_set = await client(GetStickerSetRequest(stickerset=input_set, hash=0))
+        docs = sticker_set.documents
+        total = len(docs)
+        await send_message(client, chat_id, f"📦 Найдено {total} стикеров в наборе. Начинаю анализ (с задержками для обхода лимитов API)...")
+        
+        os.makedirs("database/cache", exist_ok=True)
+        count = 0
+        skipped = 0
+        
+        for i, doc in enumerate(docs):
+            try:
+                # Проверяем, есть ли уже в базе
+                existing = get_sticker(doc.id)
+                if existing:
+                    skipped += 1
+                    continue
+                    
+                file_path = await client.download_media(doc, file="database/cache/")
+                if not file_path:
+                    continue
+                    
+                file_path = await ensure_static_image(file_path)
+                if not file_path:
+                    continue
+                    
+                ext = os.path.splitext(file_path)[1].lower()
+                mime_type = "image/jpeg"
+                if ext == ".png": mime_type = "image/png"
+                elif ext == ".webp": mime_type = "image/webp"
+
+                with open(file_path, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode('utf-8')
+                
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                    
+                image_url = f"data:{mime_type};base64,{b64_data}"
+                prompt = (
+                    "Ты — ИИ-аналитик стикеров. Опиши этот стикер кратко, 1-3 словами или ключевыми тегами на русском языке. "
+                    "Например: 'подмигивающий кот', 'смеющийся череп', 'грустный смайлик', 'сердечко'. "
+                    "Ответь СТРОГО одной фразой или ключевыми словами через запятую, без знаков препинания в конце и лишнего текста."
+                )
+                
+                description = await generate_response(prompt, is_vision=True, image_url=image_url)
+                description_clean = description.strip().lower().replace(".", "").replace('"', '').replace("'", "")
+                
+                if description_clean:
+                    emoji = ""
+                    for attr in getattr(doc, 'attributes', []):
+                        if isinstance(attr, DocumentAttributeSticker) and attr.alt:
+                            emoji = attr.alt
+                            break
+                    
+                    final_desc = f"{description_clean}, {emoji}" if emoji else description_clean
+                    save_sticker(doc.id, final_desc)
+                    count += 1
+                    
+            except Exception as e:
+                logger.error(f"Ошибка при обработке стикера {i+1} из набора: {e}")
+                
+            # Задержки для лимитов: 1 секунда после каждого, плюс 5 секунд каждые 3 стикера
+            if (i + 1) % 3 == 0:
+                await asyncio.sleep(5)
+            else:
+                await asyncio.sleep(1)
+                
+        await send_message(client, chat_id, f"✅ Анализ набора завершён! Успешно добавлено: {count}, пропущено (уже были в базе): {skipped}.")
+        
+    except Exception as e:
+        logger.error(f"Ошибка при анализе полного стикерпака: {e}")
+        from tg.sender import send_message
+        await send_message(client, chat_id, f"❌ Ошибка при анализе стикерпака: {e}")
 
 def register_handlers(client):
     @client.on(events.NewMessage())

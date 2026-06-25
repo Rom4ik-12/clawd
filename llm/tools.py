@@ -212,6 +212,19 @@ AGENT_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "analyze_sticker_set",
+            "description": "Запустить полный анализ стикерпака в фоне (только для владельца). Если вызвана без параметров, пытается взять стикерпак из сообщения, на которое отвечает (reply).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "short_name": {"type": "string", "description": "Короткое имя стикерпака (short_name). Опционально."}
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "leave_channel",
             "description": "Выйти из Telegram-канала или группы.",
             "parameters": {
