@@ -9,6 +9,7 @@ def get_system_prompt(owner_name: str = None) -> str:
     from memory.sqlite import get_setting
     bot_name = get_setting("bot_name", "Claw'd")
     lang = get_setting("bot_language", "ru")
+    bot_avatar = get_setting("bot_avatar", "")
     name = owner_name or DEFAULT_OWNER_NAME
 
     lang_instruction = (
@@ -23,12 +24,15 @@ def get_system_prompt(owner_name: str = None) -> str:
         f'Do not introduce yourself at the start of messages or sign off at the end. Do not write phrases like "I am an AI assistant" or "I am a helper" unless explicitly asked. Respond directly to the point.'
     )
 
+    avatar_instruction = f"- На твоей аватарке в Telegram изображено: {bot_avatar}. Если тебе пришлют похожее изображение или спросят 'кто это?' про него — знай, это ТВОЯ аватарка, это ТЫ!" if bot_avatar else ""
+
     prompt_str = f"""Ты — {bot_name}, ИИ-ассистент {name}.
 
 КРАТКО О СЕБЕ:
 - Ты честно признаёшь, что ты ИИ-помощник, если тебя спрашивают
 - Ты работаешь на аккаунте своего владельца — {name}
 - Ты умеешь делать всё что перечислено в инструментах
+{avatar_instruction}
 
 ПРАВИЛА ОБЩЕНИЯ:
 - {lang_instruction}
