@@ -174,7 +174,10 @@ async def generate_thought(event, image_url: str = None):
                 logger.info(f"🔧 [Agent] {func_name}({args})")
 
                 # Глобальная проверка безопасности
-                DANGEROUS_TOOLS = {"execute_shell", "write_file", "edit_file", "execute_telethon_code", "update_profile", "restart_bot", "reload_skills"}
+                DANGEROUS_TOOLS = {
+                    "execute_shell", "write_file", "edit_file", "execute_telethon_code", 
+                    "update_profile", "restart_bot", "reload_skills", "read_feed", "read_chat_messages"
+                }
                 if func_name in DANGEROUS_TOOLS:
                     from config import OWNER_ID
                     if sender_id != OWNER_ID:
