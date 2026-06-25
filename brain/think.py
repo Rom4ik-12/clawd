@@ -120,11 +120,13 @@ async def generate_thought(event, image_url: str = None):
     except Exception:
         pass
 
-    # Если фото/стикер — используем vision напрямую
     if image_url:
         try:
+            import re
             prompt = get_chat_prompt(context, owner_name=owner_name)
             final_text = await generate_response(prompt, is_vision=True, image_url=image_url)
+            # Удаляем сырые вызовы тулзов, если нейросеть случайно их сгенерировала текстом
+            final_text = re.sub(r"‹call:.*?›", "", final_text).strip()
             filtered = filter_response(final_text, last_msg=last_bot_msg)
             return filtered, []
         except Exception as e:
