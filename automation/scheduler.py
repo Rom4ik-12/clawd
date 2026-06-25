@@ -35,8 +35,8 @@ async def generate_daily_news_digest_for_payload(client, payload: str) -> str:
             entity = await client.get_entity(target)
             
             try:
-                from telethon.tl.functions.channels import JoinChannelRequest
-                await client(JoinChannelRequest(entity))
+                # Мы больше не вступаем в каналы автоматически
+                pass
             except Exception:
                 pass
                 
@@ -115,17 +115,9 @@ async def background_routine(client=None):
         try:
             now = local_now()
             
-            # 1. Ежедневная дефолтная сводка в 12:00 по МСК (резервная)
-            if now.hour == 12 and now.minute == 0 and last_summary_date != now.date():
-                logger.info("📊 [Scheduler] Время ежедневной сводки новостей!")
-                last_summary_date = now.date()
-                # Проверим, если в динамических задачах уже есть ежедневная сводка, не шлем дубликат
-                active_schedules = get_active_schedules()
-                has_news_digest_schedule = any(s[1] == 'news_digest' and s[4] == 'daily' for s in active_schedules)
-                if not has_news_digest_schedule:
-                    digest = await generate_daily_news_digest(client)
-                    await client.send_message(OWNER_ID, digest)
-                    logger.info("✅ [Scheduler] Дефолтная сводка отправлена владельцу")
+            # 1. Ежедневная дефолтная сводка в 12:00 по МСК УДАЛЕНА.
+            # Бот больше не шлёт автоматическую сводку и не подписывается на каналы,
+            # если пользователь сам не настроил это в планировщике.
             
             # 2. Выполнение динамических задач из БД
             schedules = get_active_schedules()
