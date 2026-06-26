@@ -173,20 +173,32 @@ async def should_respond(event) -> bool:
 
         # Если это групповой чат
         if not event.is_private:
-            # Если это ответ кому-то другому (не нам) и нас не упомянули — точно игнорируем
-            if event.message.is_reply and not is_reply_to_me and not mentioned:
-                return False
+            chat_mode = get_setting("chat_response_mode", "auto")
 
-            # Если упомянули или ответили нам — реагируем
-            if mentioned or is_reply_to_me:
-                pass
-            # Иначе, если включено динамическое решение, даем решить LLM
-            elif get_setting("dynamic_decide", "True") == "True":
-                need_resp = await decide_with_llm(event, sender_name, me_first_name)
-                if not need_resp:
+            if chat_mode == "reply_only":
+                if not is_reply_to_me:
                     return False
-            else:
-                return False
+            elif chat_mode == "trigger_only":
+                if not mentioned:
+                    return False
+            elif chat_mode == "both":
+                if not (mentioned or is_reply_to_me):
+                    return False
+            else: # auto
+                # Если это ответ кому-то другому (не нам) и нас не упомянули — точно игнорируем
+                if event.message.is_reply and not is_reply_to_me and not mentioned:
+                    return False
+
+                # Если упомянули или ответили нам — реагируем
+                if mentioned or is_reply_to_me:
+                    pass
+                # Иначе, если включено динамическое решение, даем решить LLM
+                elif get_setting("dynamic_decide", "True") == "True":
+                    need_resp = await decide_with_llm(event, sender_name, me_first_name)
+                    if not need_resp:
+                        return False
+                else:
+                    return False
         else:
             # В личных сообщениях (не от владельца)
             if get_setting("dynamic_decide", "True") == "True":

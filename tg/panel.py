@@ -354,6 +354,32 @@ def setup_handlers(bot, main_client):
             await event.answer("Language changed to English (en)!", alert=True)
             await _show_bot_config_menu(bot, event.chat_id, event)
 
+        elif data == b"set_lang_be":
+            set_setting("bot_language", "be")
+            await event.answer("Мова зносін зменена на беларускую (be)!", alert=True)
+            await _show_bot_config_menu(bot, event.chat_id, event)
+
+        elif data == b"set_lang_uk":
+            set_setting("bot_language", "uk")
+            await event.answer("Мову спілкування змінено на українську (uk)!", alert=True)
+            await _show_bot_config_menu(bot, event.chat_id, event)
+
+        elif data == b"toggle_chat_mode":
+            current_mode = get_setting("chat_response_mode", "auto")
+            modes = ["auto", "both", "reply_only", "trigger_only"]
+            next_idx = (modes.index(current_mode) + 1) % len(modes)
+            next_mode = modes[next_idx]
+            set_setting("chat_response_mode", next_mode)
+            
+            mode_names = {
+                "auto": "АВТО (Нейросеть решает сама)",
+                "both": "По Реплаю ИЛИ Триггеру",
+                "reply_only": "ТОЛЬКО по Реплаю",
+                "trigger_only": "ТОЛЬКО по Триггеру"
+            }
+            await event.answer(f"Режим ответов в группах изменен на:\n{mode_names[next_mode]}", alert=True)
+            await _show_bot_config_menu(bot, event.chat_id, event)
+
         elif data == b"schedulers_menu":
             await _show_schedulers_menu(bot, event.chat_id, event)
             await event.answer()
@@ -947,11 +973,20 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
         bot_name = get_setting("bot_name", "Claw'd")
         bot_trigger = get_setting("bot_trigger", "Claw'd")
         bot_lang = get_setting("bot_language", "ru")
+        chat_mode = get_setting("chat_response_mode", "auto")
+        
+        mode_names = {
+            "auto": "АВТО",
+            "both": "Реплай/Триггер",
+            "reply_only": "Только Реплай",
+            "trigger_only": "Только Триггер"
+        }
 
         text = (
             f"Системный конфиг\n\n"
             f"Системное имя бота: {bot_name}\n"
             f"Триггеры в группах: {bot_trigger}\n"
+            f"Режим в группах: {mode_names.get(chat_mode, chat_mode)}\n"
             f"Язык общения: {bot_lang}\n"
             f"Активная модель: {primary_model}\n"
             f"Часовой пояс: {tz}\n\n"
@@ -962,6 +997,7 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
              Button.inline("Сменить имя бота", b"set_bot_name_start")],
             [Button.inline("Настройка триггеров", b"triggers_menu"),
              Button.inline("Сменить язык", b"set_bot_lang_menu")],
+            [Button.inline(f"Режим в чатах: {mode_names.get(chat_mode, 'Сменить')}", b"toggle_chat_mode")],
             [Button.inline("Сменить часовой пояс", b"set_timezone_start")],
             [Button.inline("Назад", b"settings_menu")]
         ]
@@ -1000,6 +1036,8 @@ async def _show_select_lang_menu(bot, chat_id, event=None):
     markup = [
         [Button.inline("Русский (ru)", b"set_lang_ru")],
         [Button.inline("English (en)", b"set_lang_en")],
+        [Button.inline("Беларуская (be)", b"set_lang_be")],
+        [Button.inline("Українська (uk)", b"set_lang_uk")],
         [Button.inline("Назад", b"bot_config_menu")]
     ]
     if event and hasattr(event, 'edit'):

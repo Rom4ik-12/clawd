@@ -12,17 +12,18 @@ def get_system_prompt(owner_name: str = None) -> str:
     bot_avatar = get_setting("bot_avatar", "")
     name = owner_name or DEFAULT_OWNER_NAME
 
-    lang_instruction = (
-        "Общайся дружелюбно, по-русски, без лишнего официоза. Используй русский язык. Если собеседник пишет на другом языке — отвечай на нём."
-        if lang == "ru" else
-        "Communicate in English. Speak in a friendly and casual manner. If the interlocutor writes in another language, respond in that language."
-    )
-
-    no_intro_instruction = (
-        f'Не представляйся в начале сообщений и не подписывайся в конце. Ни в коем случае не пиши в сообщениях фразы вида "я ИИ-ассистент" или "я помощник", если тебя об этом прямо не спросили. Отвечай сразу по сути вопроса.'
-        if lang == "ru" else
-        f'Do not introduce yourself at the start of messages or sign off at the end. Do not write phrases like "I am an AI assistant" or "I am a helper" unless explicitly asked. Respond directly to the point.'
-    )
+    if lang == "uk":
+        lang_instruction = "Спілкуйся привітно, українською мовою, без зайвого офіціозу. Використовуй українську мову. Якщо співрозмовник пише іншою мовою — відповідай нею."
+        no_intro_instruction = 'Не представляйся на початку повідомлень і не підписуйся в кінці. Ні в якому разі не пиши в повідомленнях фрази на кшталт "я ШІ-асистент" або "я помічник", якщо тебе про це прямо не запитали. Відповідай одразу по суті питання.'
+    elif lang == "be":
+        lang_instruction = "Размаўляй прыязна, па-беларуску, без лішняга афіцыёзу. Выкарыстоўвай беларускую мову. Калі суразмоўца піша на іншай мове — адказвай на ёй."
+        no_intro_instruction = 'Не прадстаўляйся ў пачатку паведамленняў і не падпісвайся ў канцы. Ні ў якім разе не пішы ў паведамленнях фразы накшталт "я ШІ-асістэнт" або "я памочнік", калі цябе пра гэта прама не спыталі. Адказвай адразу па сутнасці пытання.'
+    elif lang == "en":
+        lang_instruction = "Communicate in English. Speak in a friendly and casual manner. If the interlocutor writes in another language, respond in that language."
+        no_intro_instruction = 'Do not introduce yourself at the start of messages or sign off at the end. Do not write phrases like "I am an AI assistant" or "I am a helper" unless explicitly asked. Respond directly to the point.'
+    else: # ru
+        lang_instruction = "Общайся дружелюбно, по-русски, без лишнего официоза. Используй русский язык. Если собеседник пишет на другом языке — отвечай на нём."
+        no_intro_instruction = 'Не представляйся в начале сообщений и не подписывайся в конце. Ни в коем случае не пиши в сообщениях фразы вида "я ИИ-ассистент" или "я помощник", если тебя об этом прямо не спросили. Отвечай сразу по сути вопроса.'
 
     avatar_instruction = f"- На твоей аватарке в Telegram изображено: {bot_avatar}. Если тебе пришлют похожее изображение или спросят 'кто это?' про него — знай, это ТВОЯ аватарка, это ТЫ!" if bot_avatar else ""
 
