@@ -17,13 +17,17 @@ async def auto_create_panel_bot(client) -> str:
     
     bot_name = "Claw'd Panel"
     
-    from memory.sqlite import get_setting
-    base_username = get_setting("bot_name", "Clawd").replace("'", "").replace(" ", "")
-    if not base_username:
-        base_username = "Clawd"
-        
-    random_id = random.randint(10000, 99999)
-    bot_username = f"{base_username}Panel_{random_id}_bot"
+    from config import PANEL_BOT_USERNAME
+    if PANEL_BOT_USERNAME:
+        bot_username = PANEL_BOT_USERNAME
+    else:
+        from memory.sqlite import get_setting
+        base_username = get_setting("bot_name", "Clawd").replace("'", "").replace(" ", "")
+        if not base_username:
+            base_username = "Clawd"
+            
+        random_id = random.randint(10000, 99999)
+        bot_username = f"{base_username}Panel_{random_id}_bot"
 
     try:
         async with client.conversation("@BotFather", timeout=15) as conv:

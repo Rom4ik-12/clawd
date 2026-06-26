@@ -58,6 +58,7 @@ API_ID = int(os.getenv("TG_API_ID", "0"))
 API_HASH = os.getenv("TG_API_HASH", "")
 SESSION_NAME = os.getenv("SESSION_NAME", "clawd")
 PANEL_BOT_TOKEN = os.getenv("PANEL_BOT_TOKEN", "")
+PANEL_BOT_USERNAME = os.getenv("PANEL_BOT_USERNAME", "")
 
 # ─── SearXNG ──────────────────────────────────────────────────────────────────
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searx.be")
