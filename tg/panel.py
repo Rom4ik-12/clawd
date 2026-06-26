@@ -20,9 +20,10 @@ ALLOWED_USERS = {OWNER_ID}
 _bot_client = None
 
 
-def init_panel_bot(main_client):
+def init_panel_bot(main_client, token=None):
     global _bot_client
-    if not PANEL_BOT_TOKEN:
+    bot_token = token or PANEL_BOT_TOKEN
+    if not bot_token:
         logger.warning("[Panel] PANEL_BOT_TOKEN не настроен — панель не запущена")
         return None
 
@@ -32,7 +33,7 @@ def init_panel_bot(main_client):
     set_alert_bot(_bot_client)
 
     setup_handlers(_bot_client, main_client)
-    asyncio.create_task(_bot_client.start(bot_token=PANEL_BOT_TOKEN))
+    asyncio.create_task(_bot_client.start(bot_token=bot_token))
     logger.info("[Panel] Панель управления запущена!")
     return _bot_client
 

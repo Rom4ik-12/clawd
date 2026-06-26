@@ -131,8 +131,20 @@ async def main():
     register_handlers(client)
 
     # Панель управления (бот)
+    from config import PANEL_BOT_TOKEN
     from tg.panel import init_panel_bot
-    init_panel_bot(client)
+    
+    if not PANEL_BOT_TOKEN:
+        from tg.botfather import auto_create_panel_bot
+        token = await auto_create_panel_bot(client)
+        if token:
+            import os
+            env_path = os.path.join(os.path.dirname(__file__), ".env")
+            with open(env_path, "a") as f:
+                f.write(f"\nPANEL_BOT_TOKEN={token}\n")
+            init_panel_bot(client, token=token)
+    else:
+        init_panel_bot(client)
 
     # Синхронизация пропущенных сообщений
     asyncio.create_task(sync_missed_messages(client))
