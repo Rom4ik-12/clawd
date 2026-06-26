@@ -61,11 +61,15 @@ async def auto_create_panel_bot(client) -> str:
                     logger.info(f"[BotFather] Успешно создан бот @{bot_username}")
                     
                     from config import OWNER_ID
-                    await client.send_message(
-                        OWNER_ID, 
-                        f"✅ Я автоматически создал бота для Панели Управления!\n\n"
-                        f"🔗 Перейди в @{bot_username} и нажми /start, чтобы настроить меня."
-                    )
+                    try:
+                        await client.send_message(
+                            OWNER_ID, 
+                            f"✅ Я автоматически создал бота для Панели Управления!\n\n"
+                            f"🔗 Перейди в @{bot_username} и нажми /start, чтобы настроить меня."
+                        )
+                    except Exception as e:
+                        logger.warning(f"[BotFather] Не удалось отправить сообщение владельцу (возможно он еще не писал боту): {e}")
+                        
                     return token
                 else:
                     logger.error("[BotFather] Не удалось извлечь токен из ответа")
