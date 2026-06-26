@@ -180,6 +180,18 @@ async def generate_thought(event, image_url: str = None):
                     "execute_shell", "write_file", "edit_file", "execute_telethon_code", 
                     "update_profile", "restart_bot", "reload_skills", "read_feed", "read_chat_messages"
                 }
+                MODIFICATION_TOOLS = {
+                    "execute_shell", "write_file", "edit_file", "execute_telethon_code", 
+                    "update_profile", "restart_bot", "reload_skills"
+                }
+                
+                from config import SAFE_MODE
+                if SAFE_MODE and func_name in MODIFICATION_TOOLS:
+                    tool_result = f"Отказано в доступе: Бот работает в безопасном режиме (SAFE_MODE). Команды модификации отключены."
+                    logger.warning(f"[Security] SAFE_MODE заблокировал попытку {func_name}")
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+                    continue
+
                 if func_name in DANGEROUS_TOOLS:
                     from config import OWNER_ID
                     if sender_id != OWNER_ID:
@@ -652,6 +664,14 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                 
                 # Глобальная проверка безопасности
                 DANGEROUS_TOOLS = {"execute_shell", "write_file", "edit_file", "execute_telethon_code", "update_profile", "restart_bot", "reload_skills"}
+                
+                from config import SAFE_MODE
+                if SAFE_MODE and func_name in DANGEROUS_TOOLS:
+                    tool_result = f"Отказано в доступе: Бот работает в безопасном режиме (SAFE_MODE)."
+                    logger.warning(f"[Security] SAFE_MODE заблокировал попытку {func_name} в фоновой задаче")
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
+                    continue
+
                 if func_name in DANGEROUS_TOOLS:
                     from config import OWNER_ID
                     if str(peer) != str(OWNER_ID):

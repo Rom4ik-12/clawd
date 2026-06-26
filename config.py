@@ -6,6 +6,7 @@ load_dotenv()
 # ─── Owner ────────────────────────────────────────────────────────────────────
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 OWNER_NAME = os.getenv("OWNER_NAME", "Владелец")
+SAFE_MODE = os.getenv("SAFE_MODE", "False").lower() in ("true", "1", "yes")
 
 # ─── LLM Providers ────────────────────────────────────────────────────────────
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")

@@ -64,8 +64,16 @@ async def execute_pending_actions(client, event, pending_actions: list):
         try:
             # Глобальная проверка: разрешены ли эти действия не-владельцу
             DANGEROUS_ACTIONS = {"send_message", "send_file", "create_poll", "send_location", "join_channel", "leave_channel", "set_timer", "forward_messages", "send_music", "get_video_frames", "analyze_sticker_set"}
-            if name in DANGEROUS_ACTIONS and event.sender_id != OWNER_ID:
-                logger.warning(f"[Security] Пользователь {event.sender_id} попытался выполнить {name}")
+            
+            from config import SAFE_MODE
+            if SAFE_MODE and name in DANGEROUS_ACTIONS:
+                logger.warning(f"[Security] SAFE_MODE заблокировал действие {name}")
+                from tg.sender import send_message as tg_send
+                await tg_send(client, event.chat_id, f"❌ Действие {name} заблокировано (SAFE_MODE=True).")
+                continue
+
+            if name in DANGEROUS_ACTIONS and getattr(event, 'sender_id', 0) != OWNER_ID:
+                logger.warning(f"[Security] Пользователь {getattr(event, 'sender_id', 0)} попытался выполнить {name}")
                 from tg.sender import send_message as tg_send
                 await tg_send(client, event.chat_id, f"❌ Действие {name} доступно только владельцу бота.")
                 continue
