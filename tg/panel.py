@@ -478,6 +478,9 @@ def setup_handlers(bot, main_client):
             
             if username_text == "-":
                 username_text = ""
+            else:
+                # Очищаем от @ или ссылок
+                username_text = username_text.replace("https://t.me/", "").replace("t.me/", "").lstrip("@")
                 
             await event.respond("Обновляю юзернейм...")
             try:
