@@ -12,7 +12,11 @@ from telethon import events
 from telethon.tl.functions.account import UpdateStatusRequest
 from telethon.tl.functions.messages import SendReactionRequest
 from telethon.tl.types import ReactionEmoji
-from telethon.errors import ChannelPrivateError, ChatWriteForbiddenError
+from telethon.errors import (
+    ChannelPrivateError, 
+    ChatWriteForbiddenError, 
+    UserBannedInChannelError
+)
 
 from brain.planner import should_respond
 from brain.think import generate_thought
@@ -685,16 +689,16 @@ def register_handlers(client):
                 pass
             try:
                 await client.send_read_acknowledge(event.chat_id, event.message)
-            except (ChannelPrivateError, ChatWriteForbiddenError):
-                logger.info(f"➖ [Events] Не удалось отметить прочитанным в чате {event.chat_id}: бот вышел")
+            except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
+                logger.info(f"➖ [Events] Не удалось отметить прочитанным в чате {event.chat_id}: бот вышел или забанен")
                 return
 
             # Агентный цикл
             try:
                 async with client.action(event.chat_id, 'typing'):
                     response, pending_actions = await generate_thought(event, image_url=image_url)
-            except (ChannelPrivateError, ChatWriteForbiddenError):
-                logger.info(f"➖ [Events] Бот вышел из чата {event.chat_id}, пропускаю ответ")
+            except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
+                logger.info(f"➖ [Events] Бот вышел из чата или забанен {event.chat_id}, пропускаю ответ")
                 return
 
             if response:
@@ -704,8 +708,8 @@ def register_handlers(client):
                     await send_message(client, event.chat_id, response, reply_to=reply_id)
                     save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
                     logger.info(f"📤 [Response]: {response[:100]}")
-                except (ChannelPrivateError, ChatWriteForbiddenError):
-                    logger.info(f"➖ [Events] Не удалось отправить ответ в чат {event.chat_id}: бот вышел")
+                except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
+                    logger.info(f"➖ [Events] Не удалось отправить ответ в чат {event.chat_id}: бот вышел или забанен")
                     return
 
             if pending_actions:
