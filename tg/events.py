@@ -695,8 +695,8 @@ def register_handlers(client):
 
             # Агентный цикл
             try:
-                async with client.action(event.chat_id, 'typing'):
-                    response, pending_actions = await generate_thought(event, image_url=image_url)
+                # Статус 'typing' убран, так как долгое генерирование ответа LLM может привести к спам-бану
+                response, pending_actions = await generate_thought(event, image_url=image_url)
             except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
                 logger.info(f"➖ [Events] Бот вышел из чата или забанен {event.chat_id}, пропускаю ответ")
                 return
