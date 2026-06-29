@@ -4,10 +4,11 @@ tg/panel.py — Бот-панель управления Clawd
 import asyncio
 import time
 import os
+import sys
 import logging
 import sqlite3
 from telethon import TelegramClient, events, Button
-from config import API_ID, API_HASH, PANEL_BOT_TOKEN, OWNER_ID, OWNER_NAME, DB_PATH
+from config import API_ID, API_HASH, PANEL_BOT_TOKEN, OWNER_ID, OWNER_NAME, DB_PATH, ONLY_BOT_MODE
 from memory.sqlite import (
     get_today_activities, clear_chat_context, get_setting, set_setting,
     get_shell_history
@@ -20,20 +21,25 @@ ALLOWED_USERS = {OWNER_ID}
 _bot_client = None
 
 
-def init_panel_bot(main_client, token=None):
+def init_panel_bot(main_client, token=None, existing_client=None):
     global _bot_client
     bot_token = token or PANEL_BOT_TOKEN
     if not bot_token:
         logger.warning("[Panel] PANEL_BOT_TOKEN не настроен — панель не запущена")
         return None
 
-    _bot_client = TelegramClient("panel_bot_session", API_ID, API_HASH)
+    if existing_client:
+        # Режим «только бот»: панель и обработка сообщений работают на одном клиенте
+        _bot_client = existing_client
+    else:
+        _bot_client = TelegramClient("panel_bot_session", API_ID, API_HASH)
 
     from automation.owner_alert import set_alert_bot
     set_alert_bot(_bot_client)
 
     setup_handlers(_bot_client, main_client)
-    asyncio.create_task(_bot_client.start(bot_token=bot_token))
+    if not existing_client:
+        asyncio.create_task(_bot_client.start(bot_token=bot_token))
     logger.info("[Panel] Панель управления запущена!")
     return _bot_client
 
@@ -60,6 +66,9 @@ _waiting_delete_schedule = {}
 _waiting_bot_name = {}
 _waiting_add_trigger = {}
 _waiting_delete_trigger = {}
+_waiting_typing_seconds = {}
+_waiting_session_file = {}
+_waiting_faved_delete = {}
 
 
 def setup_handlers(bot, main_client):
@@ -190,17 +199,56 @@ def setup_handlers(bot, main_client):
 
         elif data == b"sticker_menu":
             _clear_state(event.sender_id)
-            text = (
-                "Управление базой стикеров\n\n"
-                "Выбери действие для просмотра, добавления или удаления стикеров:"
+            await _show_sticker_menu(bot, event.chat_id, event)
+            await event.answer()
+
+        elif data == b"sticker_load_default":
+            from config import DEFAULT_STICKER_SET
+            if not DEFAULT_STICKER_SET:
+                await event.answer("Стикерпак по умолчанию не настроен", alert=True)
+                return
+            await event.answer("Начинаю фоновую индексацию стикерпака...", alert=True)
+            from memory.stickers import build_clawd4_index
+            asyncio.create_task(build_clawd4_index(main_client, short_name=DEFAULT_STICKER_SET))
+            await _show_sticker_menu(bot, event.chat_id, event)
+
+        elif data == b"faved_stickers_menu":
+            await _show_faved_stickers_menu(bot, event.chat_id, event)
+            await event.answer()
+
+        elif data == b"sticker_faved_list":
+            from memory.stickers import FAVED_INDEX_PATH, _load_index
+            index = _load_index(FAVED_INDEX_PATH)
+            if not index:
+                text = "Избранные стикеры не синхронизированы или список пуст."
+            else:
+                lines = [f"{i+1}. {item.get('tags', '—')} (emoji: {item.get('emoji', '—')})" for i, item in enumerate(index)]
+                text = "Избранные стикеры:\n\n" + "\n".join(lines)
+            await event.respond(text, buttons=[[Button.inline("Назад", b"faved_stickers_menu")]])
+            await event.answer()
+
+        elif data == b"sticker_faved_sync":
+            if ONLY_BOT_MODE:
+                await event.answer("Доступно только в режиме юзербота", alert=True)
+                await _show_faved_stickers_menu(bot, event.chat_id, event)
+                return
+            await event.answer("Начинаю синхронизацию избранных стикеров...", alert=True)
+            from memory.stickers import sync_faved_stickers
+            asyncio.create_task(sync_faved_stickers(main_client))
+            await _show_faved_stickers_menu(bot, event.chat_id, event)
+
+        elif data == b"sticker_faved_delete":
+            if ONLY_BOT_MODE:
+                await event.answer("Доступно только в режиме юзербота", alert=True)
+                await _show_faved_stickers_menu(bot, event.chat_id, event)
+                return
+            _clear_state(event.sender_id)
+            _waiting_faved_delete[event.sender_id] = True
+            await event.edit(
+                "Удаление из избранного\n\n"
+                "Отправь file_id стикера или сделай reply на стикер, который нужно удалить из избранного:",
+                buttons=[[Button.inline("Отмена", b"faved_stickers_menu")]]
             )
-            markup = [
-                [Button.inline("Просмотр стикеров", b"sticker_view")],
-                [Button.inline("Добавить стикер", b"sticker_add")],
-                [Button.inline("Удалить стикер", b"sticker_delete")],
-                [Button.inline("Назад в меню", b"main_menu")]
-            ]
-            await event.edit(text, buttons=markup)
             await event.answer()
 
         elif data == b"sticker_view":
@@ -304,6 +352,31 @@ def setup_handlers(bot, main_client):
                 "Изменение часового пояса\n\n"
                 "Отправьте имя часового пояса (например, Europe/Moscow, Europe/Paris, Asia/Tashkent):",
                 buttons=[[Button.inline("Отмена", b"bot_config_menu")]]
+            )
+            await event.answer()
+
+        elif data == b"set_typing_status_start":
+            _clear_state(event.sender_id)
+            _waiting_typing_seconds[event.sender_id] = True
+            current = _typing_status_text()
+            await event.edit(
+                f"Изменение статуса typing\n\n"
+                f"Текущее значение: {current}\n\n"
+                "Отправьте максимальное время статуса 'typing' за раз (в секундах).\n"
+                "0 — отключить статус typing. По умолчанию — 2 секунды.",
+                buttons=[[Button.inline("Отмена", b"bot_config_menu")]]
+            )
+            await event.answer()
+
+        elif data == b"upload_session_file":
+            _clear_state(event.sender_id)
+            _waiting_session_file[event.sender_id] = True
+            await event.edit(
+                "Загрузка .session файла\n\n"
+                "Отправьте файл сессии Telegram (например, clawd.session).\n"
+                "После сохранения бот переключится в режим юзербота и перезапустится.\n\n"
+                "Убедитесь, что в .env заданы корректные TG_API_ID и TG_API_HASH для этого аккаунта.",
+                buttons=[[Button.inline("Отмена", b"settings_menu")]]
             )
             await event.answer()
 
@@ -542,6 +615,74 @@ def setup_handlers(bot, main_client):
             await _show_bot_config_menu(bot, event.chat_id)
             return
 
+        # Изменение статуса typing
+        if _waiting_typing_seconds.get(event.sender_id):
+            seconds_text = (event.message.text or "").strip()
+            _waiting_typing_seconds.pop(event.sender_id, None)
+            try:
+                seconds = int(seconds_text)
+                if seconds < 0:
+                    raise ValueError("Значение не может быть отрицательным")
+                set_setting("typing_status_max_seconds", str(seconds))
+                await event.respond(f"Статус typing изменен: {_typing_status_text()}")
+            except ValueError:
+                await event.respond("Ошибка: отправьте целое число секунд (0 — выключить).")
+                
+            await _show_bot_config_menu(bot, event.chat_id)
+            return
+
+        # Загрузка .session файла
+        if _waiting_session_file.get(event.sender_id):
+            _waiting_session_file.pop(event.sender_id, None)
+            if not event.message.document:
+                await event.respond("Пожалуйста, отправьте файл .session.")
+                await _show_settings_menu(bot, event.chat_id)
+                return
+
+            file_name = getattr(event.message.document.attributes[0], 'file_name', '') if event.message.document.attributes else ''
+            if not file_name.endswith('.session'):
+                await event.respond("Ошибка: файл должен иметь расширение .session")
+                await _show_settings_menu(bot, event.chat_id)
+                return
+
+            await event.respond("Скачиваю файл сессии...")
+            try:
+                path = await event.message.download_media()
+                if not path or not os.path.exists(path):
+                    raise Exception("Не удалось скачать файл.")
+
+                from config import SESSION_NAME
+                target_path = os.path.join(os.path.dirname(__file__), os.pardir, f"{SESSION_NAME}.session")
+                target_path = os.path.abspath(target_path)
+
+                # Закрываем текущий клиент, если он открыт, чтобы освободить файл
+                try:
+                    if main_client and main_client.is_connected():
+                        await main_client.disconnect()
+                except Exception:
+                    pass
+
+                import shutil
+                shutil.move(path, target_path)
+
+                # Отключаем режим только бота
+                _set_env_value("ONLY_BOT_MODE", "False")
+
+                await event.respond(
+                    f"✅ Файл сессии сохранён как {os.path.basename(target_path)}.\n"
+                    "Переключаюсь в режим юзербота и перезапускаюсь..."
+                )
+
+                # Даём время на отправку сообщения и перезапускаем процесс
+                await asyncio.sleep(2)
+                sys.exit(0)
+
+            except Exception as e:
+                logger.error(f"[Panel] Ошибка загрузки .session: {e}")
+                await event.respond(f"❌ Ошибка загрузки .session: {e}")
+                await _show_settings_menu(bot, event.chat_id)
+            return
+
         # Изменение имени бота (в prompt)
         if _waiting_bot_name.get(event.sender_id):
             name_text = (event.message.text or "").strip()
@@ -604,6 +745,33 @@ def setup_handlers(bot, main_client):
                 await event.respond(f"Триггер {del_text} не найден в списке.")
                 
             await _show_triggers_menu(bot, event.chat_id)
+            return
+
+        # Удаление стикера из избранного
+        if _waiting_faved_delete.get(event.sender_id):
+            _waiting_faved_delete.pop(event.sender_id, None)
+            file_id = None
+
+            if event.message.is_reply and event.message.reply_to_msg_id:
+                reply_msg = await event.message.get_reply_message()
+                if reply_msg and reply_msg.sticker:
+                    file_id = str(reply_msg.sticker.id)
+            elif event.message.text:
+                file_id = event.message.text.strip()
+
+            if not file_id:
+                await event.respond("Ошибка: отправь file_id или сделай reply на стикер.")
+                await _show_faved_stickers_menu(bot, event.chat_id)
+                return
+
+            await event.respond("Удаляю стикер из избранного...")
+            from memory.stickers import remove_faved_sticker
+            success = await remove_faved_sticker(main_client, file_id)
+            if success:
+                await event.respond("✅ Стикер удалён из избранного.")
+            else:
+                await event.respond("❌ Не удалось удалить стикер из избранного.")
+            await _show_faved_stickers_menu(bot, event.chat_id)
             return
 
         # Добавление задачи в планировщик
@@ -886,6 +1054,51 @@ def _clear_state(user_id):
     _waiting_bot_name.pop(user_id, None)
     _waiting_add_trigger.pop(user_id, None)
     _waiting_delete_trigger.pop(user_id, None)
+    _waiting_typing_seconds.pop(user_id, None)
+    _waiting_session_file.pop(user_id, None)
+    _waiting_faved_delete.pop(user_id, None)
+
+
+def _set_env_value(key: str, value: str):
+    """Обновляет или добавляет переменную в .env файл проекта."""
+    try:
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        lines = []
+        if os.path.exists(env_path):
+            with open(env_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+        found = False
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}=") or line.startswith(f"# {key}="):
+                lines[i] = f"{key}={value}\n"
+                found = True
+                break
+
+        if not found:
+            if lines and not lines[-1].endswith("\n"):
+                lines.append("\n")
+            lines.append(f"{key}={value}\n")
+
+        with open(env_path, "w", encoding="utf-8") as f:
+            f.writelines(lines)
+    except Exception as e:
+        logger.error(f"[Panel] Ошибка обновления .env ({key}={value}): {e}")
+
+
+def is_waiting_for_input(user_id) -> bool:
+    """True, если панель управления ожидает от пользователя ввода значения."""
+    waiting_states = [
+        _waiting_clear_context, _waiting_mem_view_msgs, _waiting_mem_view_sums,
+        _waiting_mem_gen_sum, _waiting_mem_clear_all, _waiting_mem_clear_msgs,
+        _waiting_mem_clear_sums, _waiting_sticker_file, _waiting_sticker_desc,
+        _waiting_sticker_delete, _waiting_shell_cmd, _waiting_name, _waiting_bio,
+        _waiting_username, _waiting_avatar, _waiting_timezone, _waiting_add_schedule,
+        _waiting_delete_schedule, _waiting_bot_name, _waiting_add_trigger,
+        _waiting_delete_trigger, _waiting_typing_seconds, _waiting_session_file,
+        _waiting_faved_delete,
+    ]
+    return any(state.get(user_id) for state in waiting_states)
 
 
 async def _get_system_status(main_client) -> str:
@@ -897,7 +1110,10 @@ async def _get_system_status(main_client) -> str:
     if os.path.exists(DB_PATH):
         db_size_kb = os.path.getsize(DB_PATH) // 1024
 
-    userbot_status = "Онлайн" if main_client and main_client.is_connected() else "Оффлайн"
+    if ONLY_BOT_MODE:
+        userbot_status = "Режим только бот"
+    else:
+        userbot_status = "Онлайн" if main_client and main_client.is_connected() else "Оффлайн"
     info = await get_system_info()
 
     return (
@@ -915,16 +1131,28 @@ async def _get_system_status(main_client) -> str:
 
 
 async def _show_settings_menu(bot, chat_id, event=None):
-    text = (
-        "Настройки бота\n\n"
-        "Выберите раздел для изменения настроек профиля аккаунта, расписания задач или системных параметров."
-    )
-    markup = [
-        [Button.inline("Профиль аккаунта", b"profile_settings")],
-        [Button.inline("Системный конфиг", b"bot_config_menu")],
-        [Button.inline("Планировщик задач", b"schedulers_menu")],
-        [Button.inline("В главное меню", b"main_menu")]
-    ]
+    if ONLY_BOT_MODE:
+        text = (
+            "Настройки бота\n\n"
+            "Выберите раздел для изменения системных параметров или расписания задач."
+        )
+        markup = [
+            [Button.inline("Системный конфиг", b"bot_config_menu")],
+            [Button.inline("Планировщик задач", b"schedulers_menu")],
+            [Button.inline("Загрузить .session файл", b"upload_session_file")],
+            [Button.inline("В главное меню", b"main_menu")]
+        ]
+    else:
+        text = (
+            "Настройки бота\n\n"
+            "Выберите раздел для изменения настроек профиля аккаунта, расписания задач или системных параметров."
+        )
+        markup = [
+            [Button.inline("Профиль аккаунта", b"profile_settings")],
+            [Button.inline("Системный конфиг", b"bot_config_menu")],
+            [Button.inline("Планировщик задач", b"schedulers_menu")],
+            [Button.inline("В главное меню", b"main_menu")]
+        ]
     if event and hasattr(event, 'edit'):
         await event.edit(text, buttons=markup)
     else:
@@ -932,6 +1160,18 @@ async def _show_settings_menu(bot, chat_id, event=None):
 
 
 async def _show_profile_settings(bot, chat_id, event=None):
+    if ONLY_BOT_MODE:
+        text = (
+            "Профиль аккаунта недоступен в режиме «только бот».\n\n"
+            "Редактирование имени, описания, аватара и юзернейма бота выполняется через @BotFather."
+        )
+        markup = [[Button.inline("Назад", b"settings_menu")]]
+        if event and hasattr(event, 'edit'):
+            await event.edit(text, buttons=markup)
+        else:
+            await bot.send_message(chat_id, text, buttons=markup)
+        return
+
     try:
         from tg.client import get_client
         main_client = get_client()
@@ -986,6 +1226,8 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
             "trigger_only": "Только Триггер"
         }
 
+        typing_max = _typing_status_text()
+
         text = (
             f"Системный конфиг\n\n"
             f"Системное имя бота: {bot_name}\n"
@@ -993,7 +1235,8 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
             f"Режим в группах: {mode_names.get(chat_mode, chat_mode)}\n"
             f"Язык общения: {bot_lang}\n"
             f"Активная модель: {primary_model}\n"
-            f"Часовой пояс: {tz}\n\n"
+            f"Часовой пояс: {tz}\n"
+            f"Статус typing: {typing_max}\n\n"
             f"Выберите параметр для изменения:"
         )
         markup = [
@@ -1002,6 +1245,7 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
             [Button.inline("Настройка триггеров", b"triggers_menu"),
              Button.inline("Сменить язык", b"set_bot_lang_menu")],
             [Button.inline(f"Режим в чатах: {mode_names.get(chat_mode, 'Сменить')}", b"toggle_chat_mode")],
+            [Button.inline("Сменить статус typing", b"set_typing_status_start")],
             [Button.inline("Сменить часовой пояс", b"set_timezone_start")],
             [Button.inline("Назад", b"settings_menu")]
         ]
@@ -1011,6 +1255,17 @@ async def _show_bot_config_menu(bot, chat_id, event=None):
             await bot.send_message(chat_id, text, buttons=markup)
     except Exception as e:
         logger.error(f"[Panel] Error config menu: {e}")
+
+
+def _typing_status_text() -> str:
+    """Возвращает человекочитаемое значение настройки typing."""
+    raw = get_setting("typing_status_max_seconds", "2").strip().lower()
+    if raw in ("", "0", "off", "false"):
+        return "выкл"
+    try:
+        return f"{int(raw)} сек"
+    except ValueError:
+        return "выкл"
 
 
 async def _show_select_model_menu(bot, chat_id, event=None):
@@ -1079,6 +1334,54 @@ async def _show_triggers_menu(bot, chat_id, event=None):
             await bot.send_message(chat_id, text, buttons=markup)
     except Exception as e:
         logger.error(f"[Panel] Error triggers menu: {e}")
+
+
+async def _show_sticker_menu(bot, chat_id, event=None):
+    try:
+        from config import DEFAULT_STICKER_SET
+        default_set_text = f" ({DEFAULT_STICKER_SET})" if DEFAULT_STICKER_SET else ""
+        text = (
+            "Управление базой стикеров\n\n"
+            "Выбери действие для просмотра, добавления или удаления стикеров:"
+        )
+        markup = [
+            [Button.inline("Просмотр стикеров", b"sticker_view")],
+            [Button.inline("Добавить стикер", b"sticker_add")],
+            [Button.inline("Удалить стикер", b"sticker_delete")],
+            [Button.inline(f"Загрузить стикерпак{default_set_text}", b"sticker_load_default")],
+            [Button.inline("Избранные стикеры", b"faved_stickers_menu")],
+            [Button.inline("Назад в меню", b"main_menu")]
+        ]
+        if event and hasattr(event, 'edit'):
+            await event.edit(text, buttons=markup)
+        else:
+            await bot.send_message(chat_id, text, buttons=markup)
+    except Exception as e:
+        logger.error(f"[Panel] Error sticker menu: {e}")
+
+
+async def _show_faved_stickers_menu(bot, chat_id, event=None):
+    try:
+        from memory.stickers import has_faved_index
+        status = "синхронизированы" if has_faved_index() else "не синхронизированы"
+        text = (
+            "Избранные стикеры\n\n"
+            f"Статус: {status}\n\n"
+            "Управляй избранными стикерами аккаунта. "
+            "Доступно только в режиме юзербота (не в режиме 'только бот')."
+        )
+        markup = [
+            [Button.inline("Список избранных", b"sticker_faved_list")],
+            [Button.inline("Синхронизировать", b"sticker_faved_sync")],
+            [Button.inline("Удалить из избранного", b"sticker_faved_delete")],
+            [Button.inline("Назад", b"sticker_menu")]
+        ]
+        if event and hasattr(event, 'edit'):
+            await event.edit(text, buttons=markup)
+        else:
+            await bot.send_message(chat_id, text, buttons=markup)
+    except Exception as e:
+        logger.error(f"[Panel] Error faved stickers menu: {e}")
 
 
 async def _show_schedulers_menu(bot, chat_id, event=None):

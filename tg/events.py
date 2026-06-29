@@ -23,8 +23,9 @@ from brain.think import generate_thought
 from tg.sender import send_message
 from brain.style_filter import filter_response
 from automation.owner_alert import alert_owner
-from memory.sqlite import save_message, get_matching_sticker
-from config import OWNER_ID, OWNER_NAME
+from memory.sqlite import save_message, get_matching_sticker, get_setting
+from config import OWNER_ID, OWNER_NAME, ONLY_BOT_MODE
+from tg.panel import is_waiting_for_input
 
 logger = logging.getLogger("events")
 
@@ -45,6 +46,17 @@ def get_ram_usage() -> str:
     except Exception:
         pass
     return f"{random.randint(100, 200)} MB"
+
+
+def _get_typing_max_seconds() -> int:
+    """Максимальная длительность статуса typing за раз (0 — отключен)."""
+    raw = get_setting("typing_status_max_seconds", "2").strip().lower()
+    if raw in ("", "0", "off", "false"):
+        return 0
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 
 
 async def run_delayed_message(client, delay_seconds: int, target_chat, text: str):
@@ -217,6 +229,14 @@ async def execute_pending_actions(client, event, pending_actions: list):
             elif name == "send_sticker":
                 query = args.get("query", "")
                 file_id = get_matching_sticker(query)
+                # Fallback на избранные стикеры
+                if not file_id:
+                    from memory.stickers import get_faved_sticker
+                    file_id = get_faved_sticker(query)
+                # Fallback на нативный индекс Clawd4
+                if not file_id:
+                    from memory.stickers import get_clawd4_sticker
+                    file_id = get_clawd4_sticker(query)
                 if file_id:
                     await client.send_file(event.chat_id, file_id)
 
@@ -447,6 +467,111 @@ async def analyze_full_sticker_set_background(client, input_set, chat_id):
         from tg.sender import send_message
         await send_message(client, chat_id, f"❌ Ошибка при анализе стикерпака: {e}")
 
+
+async def load_default_sticker_set(client, short_name: str = None, notify_chat_id=None):
+    """Фоновая загрузка стикерпака по короткому имени (по умолчанию Clawd4)."""
+    from telethon.tl.types import InputStickerSetShortName
+    from telethon.tl.functions.messages import GetStickerSetRequest
+    from telethon.tl.types import DocumentAttributeSticker
+    from llm.provider import generate_response
+    from memory.sqlite import save_sticker, get_sticker, get_all_stickers
+    from tg.sender import send_message
+
+    if not short_name:
+        from config import DEFAULT_STICKER_SET
+        short_name = DEFAULT_STICKER_SET
+    if not short_name:
+        return
+
+    try:
+        logger.info(f"[Stickers] Загрузка стикерпака '{short_name}'...")
+        input_set = InputStickerSetShortName(short_name=short_name)
+        sticker_set = await client(GetStickerSetRequest(stickerset=input_set, hash=0))
+        docs = sticker_set.documents
+        total = len(docs)
+        if not total:
+            logger.info(f"[Stickers] Стикерпак '{short_name}' пуст или недоступен.")
+            if notify_chat_id:
+                await send_message(client, notify_chat_id, f"Стикерпак '{short_name}' пуст или недоступен.")
+            return
+
+        if notify_chat_id:
+            await send_message(
+                client, notify_chat_id,
+                f"📦 Загружаю стикерпак '{short_name}' ({total} шт.). Это займёт некоторое время."
+            )
+
+        os.makedirs("database/cache", exist_ok=True)
+        count = 0
+        skipped = 0
+
+        for i, doc in enumerate(docs):
+            try:
+                existing = get_sticker(doc.id)
+                if existing:
+                    skipped += 1
+                    continue
+
+                file_path = await client.download_media(doc, file="database/cache/")
+                if not file_path:
+                    continue
+
+                file_path = await ensure_static_image(file_path)
+                if not file_path:
+                    continue
+
+                ext = os.path.splitext(file_path)[1].lower()
+                mime_type = "image/jpeg"
+                if ext == ".png": mime_type = "image/png"
+                elif ext == ".webp": mime_type = "image/webp"
+
+                with open(file_path, "rb") as f:
+                    b64_data = base64.b64encode(f.read()).decode('utf-8')
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+                image_url = f"data:{mime_type};base64,{b64_data}"
+                prompt = (
+                    "Ты — ИИ-аналитик стикеров. Опиши этот стикер кратко, 1-3 словами или ключевыми тегами на русском языке. "
+                    "Например: 'подмигивающий кот', 'смеющийся череп', 'грустный смайлик', 'сердечко'. "
+                    "Ответь СТРОГО одной фразой или ключевыми словами через запятую, без знаков препинания в конце и лишнего текста."
+                )
+
+                description = await generate_response(prompt, is_vision=True, image_url=image_url)
+                description_clean = description.strip().lower().replace(".", "").replace('"', '').replace("'", "")
+
+                if description_clean:
+                    emoji = ""
+                    for attr in getattr(doc, 'attributes', []):
+                        if isinstance(attr, DocumentAttributeSticker) and attr.alt:
+                            emoji = attr.alt
+                            break
+
+                    final_desc = f"{description_clean}, {emoji}" if emoji else description_clean
+                    save_sticker(doc.id, final_desc)
+                    count += 1
+
+            except Exception as e:
+                logger.error(f"[Stickers] Ошибка при обработке стикера {i+1} из '{short_name}': {e}")
+
+            if (i + 1) % 3 == 0:
+                await asyncio.sleep(5)
+            else:
+                await asyncio.sleep(1)
+
+        logger.info(f"[Stickers] Пак '{short_name}' загружен: добавлено {count}, пропущено {skipped}.")
+        if notify_chat_id:
+            await send_message(
+                client, notify_chat_id,
+                f"✅ Стикерпак '{short_name}' загружен: добавлено {count}, пропущено {skipped}."
+            )
+
+    except Exception as e:
+        logger.error(f"[Stickers] Ошибка загрузки стикерпака '{short_name}': {e}")
+        if notify_chat_id:
+            await send_message(client, notify_chat_id, f"❌ Ошибка загрузки стикерпака '{short_name}': {e}")
+
+
 def register_handlers(client):
     @client.on(events.NewMessage())
     async def handler(event):
@@ -471,6 +596,15 @@ def register_handlers(client):
                 asyncio.create_task(analyze_and_save_sticker_async(client, event))
 
             msg_text = (event.message.text or "").strip()
+
+            # В режиме «только бот» команды панели (/start и др.) обрабатываются
+            # отдельным обработчиком панели, здесь их пропускаем.
+            # Также не отвечаем, пока панель ожидает ввода параметра от владельца.
+            if ONLY_BOT_MODE:
+                if msg_text.startswith('/'):
+                    return
+                if is_waiting_for_input(event.sender_id):
+                    return
 
             # ─── Юзербот-команды (перехватываем исходящие) ───────────────────
             if event.out:
@@ -692,7 +826,8 @@ def register_handlers(client):
 
             # Сразу заходим в сеть и читаем
             try:
-                await client(UpdateStatusRequest(offline=False))
+                if not ONLY_BOT_MODE:
+                    await client(UpdateStatusRequest(offline=False))
             except Exception:
                 pass
             try:
@@ -702,9 +837,23 @@ def register_handlers(client):
                 return
 
             # Агентный цикл
+            response, pending_actions = None, None
             try:
-                # Статус 'typing' убран, так как долгое генерирование ответа LLM может привести к спам-бану
-                response, pending_actions = await generate_thought(event, image_url=image_url)
+                typing_max = _get_typing_max_seconds()
+                if typing_max > 0:
+                    # Запускаем генерацию и показываем typing не дольше заданного лимита
+                    thought_task = asyncio.create_task(generate_thought(event, image_url=image_url))
+                    async with client.action(event.chat_id, 'typing'):
+                        try:
+                            response, pending_actions = await asyncio.wait_for(
+                                asyncio.shield(thought_task), timeout=typing_max
+                            )
+                        except asyncio.TimeoutError:
+                            pass
+                    if not thought_task.done():
+                        response, pending_actions = await thought_task
+                else:
+                    response, pending_actions = await generate_thought(event, image_url=image_url)
             except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
                 logger.info(f"➖ [Events] Бот вышел из чата или забанен {event.chat_id}, пропускаю ответ")
                 return

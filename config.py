@@ -60,6 +60,15 @@ SESSION_NAME = os.getenv("SESSION_NAME", "clawd")
 PANEL_BOT_TOKEN = os.getenv("PANEL_BOT_TOKEN", "")
 PANEL_BOT_USERNAME = os.getenv("PANEL_BOT_USERNAME", "")
 
+# Режим «только бот»: вместо юзербот-аккаунта используется один Telegram-бот
+# (панель управления и общение работают внутри одного бота).
+ONLY_BOT_MODE = os.getenv("ONLY_BOT_MODE", "False").lower() in ("true", "1", "yes")
+
+# ─── Stickers ─────────────────────────────────────────────────────────────────
+# Короткое имя стикерпака по умолчанию, который будет загружен в библиотеку бота.
+# Например: clawd4. Пустое значение — не загружать автоматически.
+DEFAULT_STICKER_SET = os.getenv("DEFAULT_STICKER_SET", "clawd4")
+
 # ─── SearXNG ──────────────────────────────────────────────────────────────────
 SEARXNG_URL = os.getenv("SEARXNG_URL", "https://searx.be")
 

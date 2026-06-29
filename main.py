@@ -3,11 +3,14 @@ os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 import asyncio
 import logging
-from tg.client import get_client
+from telethon import TelegramClient
+from tg.client import get_client, set_client
 from tg.events import register_handlers
+from tg.panel import init_panel_bot
 from memory.sqlite import init_db
 from memory.loader import load_style_examples
 from automation.scheduler import background_routine
+from config import API_ID, API_HASH, SESSION_NAME, PANEL_BOT_TOKEN, ONLY_BOT_MODE, DEFAULT_STICKER_SET
 
 os.makedirs("logs", exist_ok=True)
 
@@ -118,42 +121,80 @@ async def sync_avatar_description(client):
         print(f"❌ [Sync] Ошибка генерации аватарки: {e}")
 
 
+async def sync_default_sticker_set(client):
+    """При необходимости строит/обновляет нативный индекс стикерпака по умолчанию."""
+    from memory.stickers import has_clawd4_index, build_clawd4_index, seed_clawd4_stickers_to_db
+    if DEFAULT_STICKER_SET and not has_clawd4_index():
+        print(f"🎨 [Stickers] Индексирую стикерпак '{DEFAULT_STICKER_SET}'...")
+        await build_clawd4_index(client, short_name=DEFAULT_STICKER_SET)
+    # Захардкоженные описания Clawd4 всегда доступны в БД stickers
+    seed_clawd4_stickers_to_db()
+
+
 async def main():
     # Инициализация
     init_db()
     load_style_examples()
 
-    client = get_client()
-    await client.start()
-    print("🤖 Clawd is online!")
+    if ONLY_BOT_MODE:
+        if not PANEL_BOT_TOKEN:
+            logging.error(
+                "[Main] ONLY_BOT_MODE включен, но PANEL_BOT_TOKEN не задан. "
+                "Создайте бота через @BotFather и укажите токен в .env"
+            )
+            return
 
-    # Регистрация обработчиков userbot
-    register_handlers(client)
+        # Основной клиент — сам бот (без отдельного Telegram-аккаунта)
+        client = TelegramClient(f"{SESSION_NAME}_bot", API_ID, API_HASH)
+        set_client(client)
+        await client.start(bot_token=PANEL_BOT_TOKEN)
+        print("🤖 Clawd is online in ONLY BOT mode!")
 
-    # Панель управления (бот)
-    from config import PANEL_BOT_TOKEN
-    from tg.panel import init_panel_bot
-    
-    if not PANEL_BOT_TOKEN:
-        from tg.botfather import auto_create_panel_bot
-        token = await auto_create_panel_bot(client)
-        if token:
-            import os
-            env_path = os.path.join(os.path.dirname(__file__), ".env")
-            with open(env_path, "a") as f:
-                f.write(f"\nPANEL_BOT_TOKEN={token}\n")
-            init_panel_bot(client, token=token)
+        # Обработка входящих сообщений и панель управления работают в одном боте
+        register_handlers(client)
+        init_panel_bot(client, token=PANEL_BOT_TOKEN, existing_client=client)
+
+        # Загрузка стикерпака по умолчанию, если библиотека пуста
+        asyncio.create_task(sync_default_sticker_set(client))
+
+        # Синхронизация пропущенных сообщений недоступна для бота (нет аккаунта)
+        asyncio.create_task(sync_avatar_description(client))
+        asyncio.create_task(background_routine(client))
     else:
-        init_panel_bot(client)
+        client = get_client()
+        await client.start()
+        print("🤖 Clawd is online!")
 
-    # Синхронизация пропущенных сообщений
-    asyncio.create_task(sync_missed_messages(client))
+        # Регистрация обработчиков userbot
+        register_handlers(client)
 
-    # Разовое чтение аватарки (если еще не прочитана)
-    asyncio.create_task(sync_avatar_description(client))
+        # Панель управления (отдельный бот)
+        if not PANEL_BOT_TOKEN:
+            from tg.botfather import auto_create_panel_bot
+            token = await auto_create_panel_bot(client)
+            if token:
+                env_path = os.path.join(os.path.dirname(__file__), ".env")
+                with open(env_path, "a") as f:
+                    f.write(f"\nPANEL_BOT_TOKEN={token}\n")
+                init_panel_bot(client, token=token)
+        else:
+            init_panel_bot(client)
 
-    # Фоновые задачи
-    asyncio.create_task(background_routine())
+        # Загрузка стикерпака по умолчанию, если библиотека пуста
+        asyncio.create_task(sync_default_sticker_set(client))
+
+        # Синхронизация избранных стикеров аккаунта (только для юзербота)
+        from memory.stickers import sync_faved_stickers
+        asyncio.create_task(sync_faved_stickers(client))
+
+        # Синхронизация пропущенных сообщений
+        asyncio.create_task(sync_missed_messages(client))
+
+        # Разовое чтение аватарки (если еще не прочитана)
+        asyncio.create_task(sync_avatar_description(client))
+
+        # Фоновые задачи
+        asyncio.create_task(background_routine(client))
 
     await client.run_until_disconnected()
 
