@@ -13,6 +13,11 @@ def init_db():
                  (id INTEGER PRIMARY KEY, chat_id INTEGER, sender_id INTEGER,
                   text TEXT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
 
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  role TEXT DEFAULT 'friend',
+                  memory_context TEXT DEFAULT '')''')
+
     c.execute('''CREATE TABLE IF NOT EXISTS facts
                  (id INTEGER PRIMARY KEY, user_id INTEGER, fact TEXT,
                   timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)''')
@@ -48,6 +53,9 @@ def init_db():
                   last_run DATETIME,
                   next_run DATETIME,
                   active INTEGER DEFAULT 1)''')
+
+    c.execute('''CREATE TABLE IF NOT EXISTS chat_filters
+                 (chat_id INTEGER PRIMARY KEY, is_allowed BOOLEAN)''')
 
     # Индексы
     c.execute('CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, timestamp)')
@@ -151,6 +159,36 @@ def get_active_contacts(limit=20):
     contacts = c.fetchall()
     conn.close()
     return contacts
+
+
+def get_chat_filter(chat_id: int) -> bool | None:
+    """Возвращает True если чат в whitelist, False если в blacklist, None если нет в фильтрах."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT is_allowed FROM chat_filters WHERE chat_id=?", (chat_id,))
+    row = c.fetchone()
+    conn.close()
+    return bool(row[0]) if row is not None else None
+
+
+def set_chat_filter(chat_id: int, is_allowed: bool | None):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    if is_allowed is None:
+        c.execute("DELETE FROM chat_filters WHERE chat_id=?", (chat_id,))
+    else:
+        c.execute("INSERT OR REPLACE INTO chat_filters (chat_id, is_allowed) VALUES (?, ?)", (chat_id, int(is_allowed)))
+    conn.commit()
+    conn.close()
+
+
+def log_audit_action(user_id: int, action: str, details: str = ""):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    desc = f"User {user_id}: {action} | {details}"
+    c.execute("INSERT INTO activity_log (activity_type, description) VALUES (?, ?)", ("AUDIT", desc))
+    conn.commit()
+    conn.close()
 
 
 def clear_chat_context(chat_id):

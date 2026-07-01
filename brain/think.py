@@ -5,7 +5,7 @@ brain/think.py — Агентный цикл Clawd
 import json
 import logging
 import sys
-from llm.provider import generate_with_tools, generate_response
+from llm.provider import generate_with_tools, generate_response, stream_with_tools
 from llm.prompts import get_chat_prompt
 from llm.tools import AGENT_TOOLS, execute_local_tool
 from brain.style_filter import filter_response
@@ -21,9 +21,11 @@ _owner_current_name = None
 
 async def generate_thought(event, image_url: str = None):
     """
-    Основная функция генерации ответа.
+    Основная функция генерации ответа со стримингом.
     Запускает Agent Loop: модель → tool_call → выполнение → модель → ...
-    Возвращает: (text_response, pending_actions)
+    Генерирует:
+    ("chunk", text_chunk)
+    ("result", (text_response, pending_actions))
     """
     global _owner_current_name
     message = event.message.text or "(пустое сообщение)"
@@ -128,13 +130,20 @@ async def generate_thought(event, image_url: str = None):
             # Удаляем сырые вызовы тулзов, если нейросеть случайно их сгенерировала текстом
             final_text = re.sub(r"‹call:.*?›", "", final_text).strip()
             filtered = filter_response(final_text, last_msg=last_bot_msg)
-            return filtered, []
+            yield ("result", (filtered, []))
+            return
         except Exception as e:
             logger.warning(f"Vision error: {e}")
-            return "не могу загрузить изображение прямо сейчас", []
+            yield ("result", ("не могу загрузить изображение прямо сейчас", []))
+            return
 
     # ─── Агентный цикл ───────────────────────────────────────────────────────
     system_prompt = get_chat_prompt(context, owner_name=owner_name)
+    from config import ONLY_BOT_MODE
+    from tg.client import get_client
+    userbot = event.client
+    if not ONLY_BOT_MODE:
+        userbot = get_client() or event.client
     messages = [{"role": "user", "content": system_prompt}]
 
     pending_actions = []
@@ -142,10 +151,18 @@ async def generate_thought(event, image_url: str = None):
 
     try:
         for step in range(MAX_AGENT_STEPS):
-            text, tool_calls = await generate_with_tools(messages, AGENT_TOOLS)
-
+            text_buffer = ""
+            tool_calls = None
+            
+            async for chunk_type, chunk_data in stream_with_tools(messages, AGENT_TOOLS):
+                if chunk_type == 'content':
+                    text_buffer += chunk_data
+                    yield ("chunk", chunk_data)
+                elif chunk_type == 'tool_calls':
+                    tool_calls = chunk_data
+                    
             if tool_calls is None:
-                final_text = text
+                final_text = text_buffer
                 break
 
             # Добавляем ответ модели с tool_calls
@@ -222,6 +239,27 @@ async def generate_thought(event, image_url: str = None):
                     tool_result = format_shell_result(result)
                     log_shell(cmd, tool_result, result.get("returncode", -1))
 
+                elif func_name == "execute_code":
+                    from automation.sandbox import run_in_sandbox
+                    lang = args.get("language", "python")
+                    code = args.get("code", "")
+                    tool_result = await run_in_sandbox(lang, code)
+
+                elif func_name == "search_channels":
+                    try:
+                        from memory.vector import query_memory
+                        query = args.get("query", "")
+                        limit = args.get("limit", 3)
+                        results = query_memory(query, n=limit)
+                        if results:
+                            tool_result = "Результаты RAG поиска:\n" + "\n".join(
+                                f"- {r}" for r in results
+                            )
+                        else:
+                            tool_result = "Поиск по каналам не дал результатов."
+                    except Exception as e:
+                        tool_result = f"Ошибка RAG: {e}"
+
                 elif func_name == "read_file":
                     from host.executor import read_file
                     tool_result = await read_file(args.get("path", ""))
@@ -262,14 +300,14 @@ async def generate_thought(event, image_url: str = None):
                 elif func_name == "read_feed":
                     from internet.telegram_reader import get_recent_feed
                     try:
-                        tool_result = await get_recent_feed(event.client)
+                        tool_result = await get_recent_feed(userbot)
                     except Exception as e:
                         tool_result = f"ошибка чтения ленты: {e}"
 
                 elif func_name == "inspect_profile":
                     from internet.telegram_reader import inspect_profile
                     try:
-                        tool_result = await inspect_profile(event.client, args.get("target", ""))
+                        tool_result = await inspect_profile(userbot, args.get("target", ""))
                     except Exception as e:
                         tool_result = f"ошибка: {e}"
 
@@ -278,8 +316,8 @@ async def generate_thought(event, image_url: str = None):
                     limit = args.get("limit", 10)
                     try:
                         target = chat.strip().replace("https://t.me/", "")
-                        entity = await event.client.get_entity(target)
-                        msgs = await event.client.get_messages(entity, limit=limit)
+                        entity = await userbot.get_entity(target)
+                        msgs = await userbot.get_messages(entity, limit=limit)
                         lines = []
                         for m in reversed(msgs):
                             s = await m.get_sender()
@@ -301,12 +339,10 @@ async def generate_thought(event, image_url: str = None):
                         # 1. Поиск среди своих диалогов (local)
                         if scope in ["local", "all"]:
                             try:
-                                dialogs = await event.client.get_dialogs(limit=100)
-                                q_lower = query.lower()
-                                for d in dialogs:
+                                async for d in userbot.iter_dialogs(limit=100):
                                     title = d.name or ""
                                     username = getattr(d.entity, 'username', '') or ''
-                                    if q_lower in title.lower() or q_lower in username.lower():
+                                    if query.lower() in title.lower() or query.lower() in username.lower():
                                         link = f"https://t.me/{username}" if username else f"ID: {d.id}"
                                         results.append(f"[Личный чат] {title} ({link})")
                             except Exception as e:
@@ -317,7 +353,7 @@ async def generate_thought(event, image_url: str = None):
                             # 2.1 Поиск через контакты/глобальный поиск Telegram API
                             from telethon.tl.functions.contacts import SearchRequest
                             try:
-                                search_res = await event.client(SearchRequest(q=query, limit=15))
+                                search_res = await userbot(SearchRequest(q=query, limit=15))
                                 for chat_entity in getattr(search_res, 'chats', []):
                                     username = getattr(chat_entity, 'username', None)
                                     title = getattr(chat_entity, 'title', 'Без названия')
@@ -355,7 +391,7 @@ async def generate_thought(event, image_url: str = None):
                             try:
                                 from telethon.tl.functions.messages import SearchGlobalRequest
                                 from telethon.tl.types import InputMessagesFilterEmpty
-                                search_msgs = await event.client(SearchGlobalRequest(
+                                search_msgs = await userbot(SearchGlobalRequest(
                                     q=query,
                                     filter=InputMessagesFilterEmpty(),
                                     min_date=None,
@@ -367,7 +403,7 @@ async def generate_thought(event, image_url: str = None):
                                 for m in getattr(search_msgs, 'messages', []):
                                     text = m.text or "[Медиа]"
                                     try:
-                                        chat = await event.client.get_entity(m.peer_id)
+                                        chat = await userbot.get_entity(m.peer_id)
                                         chat_name = getattr(chat, 'title', getattr(chat, 'first_name', 'Чат'))
                                     except Exception:
                                         chat_name = f"Чат {m.peer_id}"
@@ -463,11 +499,10 @@ async def generate_thought(event, image_url: str = None):
                         username = args.get("username")
                         avatar_path = args.get("avatar_path")
                         
-                        client_to_use = event.client if 'event' in locals() and event else client
                         results = []
                         if first_name is not None or last_name is not None or about is not None:
                             from telethon.tl.functions.account import UpdateProfileRequest
-                            await client_to_use(UpdateProfileRequest(
+                            await userbot(UpdateProfileRequest(
                                 first_name=first_name if first_name is not None else '',
                                 last_name=last_name if last_name is not None else '',
                                 about=about if about is not None else ''
@@ -475,7 +510,7 @@ async def generate_thought(event, image_url: str = None):
                             results.append("Профиль обновлен (Имя/Фамилия/Био)")
                         if username is not None:
                             from telethon.tl.functions.account import UpdateUsernameRequest
-                            await client_to_use(UpdateUsernameRequest(username=username))
+                            await userbot(UpdateUsernameRequest(username=username))
                             results.append(f"Юзернейм изменен на @{username}")
                         if avatar_path:
                             import os
@@ -487,8 +522,8 @@ async def generate_thought(event, image_url: str = None):
                                     path = down_res.split("Файл скачан: ")[1].split(" (")[0].strip()
                             if os.path.exists(path):
                                 from telethon.tl.functions.photos import UploadProfilePhotoRequest
-                                uploaded = await client_to_use.upload_file(path)
-                                await client_to_use(UploadProfilePhotoRequest(fallback=False, file=uploaded))
+                                uploaded = await userbot.upload_file(path)
+                                await userbot(UploadProfilePhotoRequest(fallback=False, file=uploaded))
                                 results.append("Аватар успешно обновлен")
                                 if avatar_path.startswith("http") and os.path.exists(path):
                                     os.remove(path)
@@ -503,18 +538,16 @@ async def generate_thought(event, image_url: str = None):
                     try:
                         indent_code = "\n".join(f"    {line}" for line in code.splitlines())
                         func_def = f"async def __run_telethon_code(client, event):\n{indent_code}"
-                        client_to_use = event.client if 'event' in locals() and event else client
-                        event_to_use = event if 'event' in locals() else None
                         exec_namespace = {}
                         exec(func_def, exec_namespace)
                         exec_func = exec_namespace["__run_telethon_code"]
-                        result = await exec_func(client_to_use, event_to_use)
+                        result = await exec_func(userbot, event)
                         tool_result = f"✅ Код выполнен. Результат: {result}"
                     except Exception as e:
                         tool_result = f"❌ Ошибка выполнения кода: {e}"
 
                 elif func_name == "send_music":
-                    dest = args.get("target") or (event.chat_id if 'event' in locals() and event else target)
+                    dest = args.get("target") or event.chat_id
                     path = args.get("path", "")
                     title = args.get("title", "")
                     performer = args.get("performer", "")
@@ -526,8 +559,7 @@ async def generate_thought(event, image_url: str = None):
                             tool_result = f"Аудиофайл не найден: {path}"
                         else:
                             from telethon.tl.types import DocumentAttributeAudio
-                            client_to_use = event.client if 'event' in locals() and event else client
-                            await client_to_use.send_file(
+                            await userbot.send_file(
                                 dest,
                                 expanded,
                                 caption=caption,
@@ -559,9 +591,7 @@ async def generate_thought(event, image_url: str = None):
                 elif func_name in getattr(sys.modules['llm.tools'], 'DYNAMIC_SKILLS', {}):
                     try:
                         from llm.tools import DYNAMIC_SKILLS
-                        client_to_use = event.client if 'event' in locals() and event else client
-                        event_to_use = event if 'event' in locals() else None
-                        tool_result = await DYNAMIC_SKILLS[func_name].execute(client_to_use, event_to_use, args)
+                        tool_result = await DYNAMIC_SKILLS[func_name].execute(userbot, event, args)
                     except Exception as e:
                         tool_result = f"ошибка выполнения скилла {func_name}: {e}"
 
@@ -598,7 +628,7 @@ async def generate_thought(event, image_url: str = None):
             final_text = await generate_response(prompt)
 
         filtered = filter_response(final_text, last_msg=last_bot_msg)
-        return filtered, pending_actions
+        yield ("result", (filtered, pending_actions))
 
     except Exception as e:
         error_str = str(e)
@@ -606,7 +636,7 @@ async def generate_thought(event, image_url: str = None):
             await alert_owner(event.client, f"Ошибка в think.py: {e}")
         else:
             logger.warning(f"[think] All models failed: {error_str}")
-        return "не могу ответить прямо сейчас", []
+        yield ("result", ("не могу ответить прямо сейчас", []))
 
 
 async def run_scheduled_agent_task(client, target, task_text: str):
@@ -616,6 +646,11 @@ async def run_scheduled_agent_task(client, target, task_text: str):
     from llm.prompts import get_task_prompt
     from llm.provider import generate_with_tools, generate_response
     from llm.tools import AGENT_TOOLS, execute_local_tool
+    from config import ONLY_BOT_MODE
+    from tg.client import get_client
+    userbot = client
+    if not ONLY_BOT_MODE:
+        userbot = get_client() or client
     
     try:
         peer = int(target)
@@ -676,7 +711,7 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     from config import OWNER_ID
                     if str(peer) != str(OWNER_ID):
                         tool_result = f"Отказано в доступе: инструмент {func_name} разрешен только владельцу."
-                        logger.warning(f"[Security] Заблокирована попытка {func_name} в фоновой задаче для {peer}")
+                        logger.warning(f"[Security] Заблокирована попытку {func_name} в фоновой задаче для {peer}")
                         messages.append({"role": "tool", "tool_call_id": tc.id, "content": tool_result})
                         continue
 
@@ -698,6 +733,23 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     timeout = args.get("timeout", 30)
                     result = await execute_shell(cmd, timeout=timeout)
                     tool_result = format_shell_result(result)
+                elif func_name == "execute_code":
+                    from automation.sandbox import run_in_sandbox
+                    lang = args.get("language", "python")
+                    code = args.get("code", "")
+                    tool_result = await run_in_sandbox(lang, code)
+                elif func_name == "search_channels":
+                    query = args.get("query", "")
+                    limit = args.get("limit", 5)
+                    try:
+                        from telethon.tl.functions.contacts import SearchRequest
+                        res = await userbot(SearchRequest(q=query, limit=limit))
+                        results = []
+                        for chat_entity in getattr(res, 'chats', []):
+                            results.append(f"{chat_entity.title} (@{getattr(chat_entity, 'username', 'no_user')})")
+                        tool_result = "\n".join(results) if results else "Ничего не найдено"
+                    except Exception as e:
+                        tool_result = f"Ошибка поиска: {e}"
                 elif func_name == "read_file":
                     from host.executor import read_file
                     tool_result = await read_file(args.get("path", ""))
@@ -730,7 +782,7 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     try:
                         import os
                         expanded = os.path.expanduser(path)
-                        await client.send_file(dest, expanded, caption=caption)
+                        await userbot.send_file(dest, expanded, caption=caption)
                         tool_result = f"файл {path} успешно отправлен в {dest}"
                     except Exception as e:
                         tool_result = f"ошибка отправки файла: {e}"
@@ -765,7 +817,7 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                             poll=poll_obj,
                             correct_answers=correct_answers
                         )
-                        await client.send_message(dest, file=poll_media)
+                        await userbot.send_message(dest, file=poll_media)
                         tool_result = f"опрос '{question}' успешно отправлен в {dest}"
                     except Exception as e:
                         tool_result = f"ошибка создания опроса: {e}"
@@ -775,7 +827,7 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     lon = float(args.get("longitude", 0))
                     try:
                         from telethon.tl.types import InputMediaGeoPoint, InputGeoPoint
-                        await client.send_message(dest, file=InputMediaGeoPoint(InputGeoPoint(lat=lat, long=lon)))
+                        await userbot.send_message(dest, file=InputMediaGeoPoint(InputGeoPoint(lat=lat, long=lon)))
                         tool_result = f"локация ({lat}, {lon}) успешно отправлена в {dest}"
                     except Exception as e:
                         tool_result = f"ошибка отправки локации: {e}"
@@ -783,28 +835,28 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     username = args.get("username", "")
                     msg_text = args.get("text", "")
                     try:
-                        await client.send_message(username, msg_text)
+                        await userbot.send_message(username, msg_text)
                         tool_result = f"сообщение успешно отправлено в {username}"
                     except Exception as e:
                         tool_result = f"ошибка отправки сообщения: {e}"
                 elif func_name == "join_channel":
                     from internet.telegram_reader import join_channel
-                    tool_result = await join_channel(client, args.get("channel", ""))
+                    tool_result = await join_channel(userbot, args.get("channel", ""))
                 elif func_name == "leave_channel":
                     from internet.telegram_reader import leave_channel
-                    tool_result = await leave_channel(client, args.get("channel", ""))
+                    tool_result = await leave_channel(userbot, args.get("channel", ""))
                 elif func_name == "read_feed":
                     from internet.telegram_reader import get_recent_feed
-                    tool_result = await get_recent_feed(client)
+                    tool_result = await get_recent_feed(userbot)
                 elif func_name == "inspect_profile":
                     from internet.telegram_reader import inspect_profile
-                    tool_result = await inspect_profile(client, args.get("target", ""))
+                    tool_result = await inspect_profile(userbot, args.get("target", ""))
                 elif func_name == "read_chat_messages":
                     chat = args.get("chat", "")
                     limit = args.get("limit", 10)
                     try:
-                        entity = await client.get_entity(chat.strip().replace("https://t.me/", ""))
-                        msgs = await client.get_messages(entity, limit=limit)
+                        entity = await userbot.get_entity(chat.strip().replace("https://t.me/", ""))
+                        msgs = await userbot.get_messages(entity, limit=limit)
                         lines = []
                         for m in reversed(msgs):
                             s = await m.get_sender()
@@ -817,11 +869,9 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     query = args.get("query", "")
                     scope = args.get("scope", "all")
                     results = []
-                    seen = set()
                     if scope in ["local", "all"]:
                         try:
-                            dialogs = await client.get_dialogs(limit=50)
-                            for d in dialogs:
+                            async for d in userbot.iter_dialogs(limit=50):
                                 title = d.name or ""
                                 username = getattr(d.entity, 'username', '') or ''
                                 if query.lower() in title.lower() or query.lower() in username.lower():
@@ -830,8 +880,8 @@ async def run_scheduled_agent_task(client, target, task_text: str):
                     if scope in ["global", "all"]:
                         from telethon.tl.functions.contacts import SearchRequest
                         try:
-                            search_res = await client(SearchRequest(q=query, limit=10))
-                            for chat_entity in getattr(search_res, 'chats', []):
+                            res = await userbot(SearchRequest(q=query, limit=10))
+                            for chat_entity in getattr(res, 'chats', []):
                                 username = getattr(chat_entity, 'username', None)
                                 if username:
                                     results.append(f"[Глобальный чат] {chat_entity.title} (@{username})")

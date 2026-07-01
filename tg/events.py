@@ -70,6 +70,14 @@ async def run_delayed_message(client, delay_seconds: int, target_chat, text: str
 
 async def execute_pending_actions(client, event, pending_actions: list):
     """Выполняет Telegram-действия после отправки основного ответа."""
+    from config import ONLY_BOT_MODE
+    from tg.client import get_client
+    
+    # В гибридном режиме некоторые действия можно выполнить только от юзербота
+    userbot = client
+    if not ONLY_BOT_MODE:
+        userbot = get_client() or client
+
     for action in pending_actions:
         name = action.get("name")
         args = action.get("args", {})
@@ -161,12 +169,12 @@ async def execute_pending_actions(client, event, pending_actions: list):
 
             elif name == "join_channel":
                 from internet.telegram_reader import join_channel
-                result = await join_channel(client, args.get("channel", ""))
+                result = await join_channel(userbot, args.get("channel", ""))
                 logger.info(f"➕ [Agent] {result}")
 
             elif name == "leave_channel":
                 from internet.telegram_reader import leave_channel
-                result = await leave_channel(client, args.get("channel", ""))
+                result = await leave_channel(userbot, args.get("channel", ""))
                 logger.info(f"➖ [Agent] {result}")
                 if result.startswith("✅"):
                     logger.info(f"➖ [Agent] Бот вышел из чата, остальные действия отменены")
@@ -222,7 +230,7 @@ async def execute_pending_actions(client, event, pending_actions: list):
                             from_chat = int(from_chat)
                         if isinstance(to_chat, str) and (to_chat.isdigit() or to_chat.lstrip('-').isdigit()):
                             to_chat = int(to_chat)
-                        await client.forward_messages(to_chat, message_ids, from_chat)
+                        await userbot.forward_messages(to_chat, message_ids, from_chat)
                     except Exception as fe:
                         logger.error(f"Ошибка пересылки сообщений: {fe}")
 
@@ -676,6 +684,34 @@ def register_handlers(client):
             chat_title = getattr(chat, 'title', 'ЛС')
             logger.info(f"📥 [{chat_title}] {sender_name}: {msg_text[:100]}")
 
+            # ─── Проверка Chat Filters (Whitelist/Blacklist) ──────────────────
+            from memory.sqlite import get_chat_filter, log_audit_action
+            filter_status = get_chat_filter(event.chat_id)
+            if filter_status is False:
+                logger.info(f"🔒 Чат {event.chat_id} находится в Blacklist. Игнорируем.")
+                return
+
+            # ─── Проверка прав (Мультиаккаунт) ────────────────────────────────
+            from memory.users import is_allowed
+            if event.is_private and not is_allowed(sender_id):
+                logger.info(f"🔒 Доступ запрещен для пользователя {sender_id}")
+                from tg.sender import send_message as tg_send
+                await tg_send(client, event.chat_id, "Извините, у вас нет доступа к этому боту.")
+                return
+
+            # ─── Rate Limiting (Ограничение запросов) ─────────────────────────
+            if sender_id != OWNER_ID:
+                if not hasattr(client, "rate_limits"):
+                    client.rate_limits = {}
+                now = time.time()
+                user_times = client.rate_limits.get(sender_id, [])
+                user_times = [t for t in user_times if now - t < 60]
+                if len(user_times) >= 5:
+                    logger.warning(f"⏳ Rate limit для пользователя {sender_id}")
+                    return
+                user_times.append(now)
+                client.rate_limits[sender_id] = user_times
+
             # ─── Команды владельца ────────────────────────────────────────────
             if sender_id == OWNER_ID:
                 if msg_text.lower().startswith("напиши "):
@@ -826,48 +862,93 @@ def register_handlers(client):
 
             # Сразу заходим в сеть и читаем
             try:
-                if not ONLY_BOT_MODE:
+                # Bots don't support offline=False
+                is_bot = await client.is_bot()
+                if not is_bot:
                     await client(UpdateStatusRequest(offline=False))
             except Exception:
                 pass
             try:
-                await client.send_read_acknowledge(event.chat_id, event.message)
+                is_bot = await client.is_bot()
+                if not is_bot:
+                    await client.send_read_acknowledge(event.chat_id, event.message)
             except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
                 logger.info(f"➖ [Events] Не удалось отметить прочитанным в чате {event.chat_id}: бот вышел или забанен")
                 return
+            except Exception as e:
+                pass
 
             # Агентный цикл
             response, pending_actions = None, None
+            response_msg = None
+            text_buffer = ""
+            last_edit_time = 0
+            reply_id = event.message.id if not event.is_private else None
+
             try:
-                typing_max = _get_typing_max_seconds()
-                if typing_max > 0:
-                    # Запускаем генерацию и показываем typing не дольше заданного лимита
-                    thought_task = asyncio.create_task(generate_thought(event, image_url=image_url))
-                    async with client.action(event.chat_id, 'typing'):
-                        try:
-                            response, pending_actions = await asyncio.wait_for(
-                                asyncio.shield(thought_task), timeout=typing_max
-                            )
-                        except asyncio.TimeoutError:
-                            pass
-                    if not thought_task.done():
-                        response, pending_actions = await thought_task
-                else:
-                    response, pending_actions = await generate_thought(event, image_url=image_url)
+                # В бот-режиме стриминг
+                draft_id = (event.message.id * 1000 + int(time.time() * 10)) % 1000000000 + 1
+                
+                if ONLY_BOT_MODE:
+                    from tg.rich import send_rich_draft
+                    await send_rich_draft(event.chat_id, draft_id, "<tg-thinking>Thinking...</tg-thinking>")
+                
+                async for chunk_type, chunk_data in generate_thought(event, image_url=image_url):
+                    if chunk_type == "chunk":
+                        text_buffer += chunk_data
+                        now = time.time()
+                        if now - last_edit_time > 1.5 and text_buffer.strip():
+                            try:
+                                if ONLY_BOT_MODE:
+                                    # Отправляем только сам текст, без Thinking
+                                    await send_rich_draft(event.chat_id, draft_id, text_buffer)
+                                else:
+                                    if not response_msg:
+                                        response_msg = await send_message(client, event.chat_id, text_buffer + " ✍️", reply_to=reply_id)
+                                    else:
+                                        if hasattr(client, 'edit_message'):
+                                            from tg.markdown import md_to_html
+                                            html_text = md_to_html(text_buffer + " ✍️")
+                                            await client.edit_message(event.chat_id, response_msg.id, html_text, parse_mode='html')
+                                last_edit_time = now
+                            except Exception as e:
+                                logger.warning(f"Streaming edit error: {e}")
+                    elif chunk_type == "result":
+                        response, pending_actions = chunk_data
+
             except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
                 logger.info(f"➖ [Events] Бот вышел из чата или забанен {event.chat_id}, пропускаю ответ")
                 return
 
             if response:
-                await asyncio.sleep(random.uniform(0.5, 2.0))
-                reply_id = event.message.id if not event.is_private else None
                 try:
-                    await send_message(client, event.chat_id, response, reply_to=reply_id)
-                    save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
-                    logger.info(f"📤 [Response]: {response[:100]}")
+                    if ONLY_BOT_MODE:
+                        from tg.rich import send_rich_final
+                        rich_msg = await send_rich_final(event.chat_id, response, reply_to=reply_id)
+                        if rich_msg:
+                            logger.info(f"📤 [Rich Response]: {response[:100]}")
+                            save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                        else:
+                            # Фолбэк если API вернул ошибку
+                            await send_message(client, event.chat_id, response, reply_to=reply_id)
+                            save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                    else:
+                        if response_msg and hasattr(client, 'edit_message'):
+                            from tg.markdown import md_to_html
+                            html_text = md_to_html(response)
+                            await client.edit_message(event.chat_id, response_msg.id, html_text, parse_mode='html')
+                            save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                            logger.info(f"📤 [Response Edited]: {response[:100]}")
+                        else:
+                            await send_message(client, event.chat_id, response, reply_to=reply_id)
+                            save_message(event.chat_id, client.me_id, f"Claw'd: {response}")
+                            logger.info(f"📤 [Response]: {response[:100]}")
                 except (ChannelPrivateError, ChatWriteForbiddenError, UserBannedInChannelError):
                     logger.info(f"➖ [Events] Не удалось отправить ответ в чат {event.chat_id}: бот вышел или забанен")
                     return
+
+            from memory.sqlite import log_audit_action
+            log_audit_action(sender_id, "AGENT_QUERY", f"Chat: {event.chat_id} | Query: {msg_text[:50]}")
 
             if pending_actions:
                 await asyncio.sleep(0.3)
@@ -888,3 +969,127 @@ def register_handlers(client):
             from tg.state import get_action, set_action
             if "Отвечает" in get_action():
                 set_action("Онлайн")
+
+    @client.on(events.CallbackQuery())
+    async def callback_handler(event):
+        try:
+            data = event.data
+            if data.startswith(b"ai:"):
+                action_text = data[3:].decode('utf-8')
+                logger.info(f"🖱️ [Callback] ИИ-кнопка нажата: {action_text}")
+                
+                await event.answer("Принято")
+                
+                class MockMessage:
+                    def __init__(self, text, id):
+                        self.text = text
+                        self.id = id
+                        self.file = None
+                        self.media = None
+                        self.buttons = None
+
+                class MockEvent:
+                    def __init__(self, orig_event, text):
+                        self.chat_id = orig_event.chat_id
+                        self.sender_id = orig_event.sender_id
+                        self.message = MockMessage(text, orig_event.message_id)
+                        self.client = orig_event.client
+                        self.is_private = orig_event.is_private
+                        self.orig_event = orig_event
+                        # default media properties to None
+                        self.photo = None
+                        self.sticker = None
+                        self.voice = None
+                        self.video_note = None
+                        self.video = None
+                        self.document = None
+                        
+                    async def get_sender(self): return await self.orig_event.get_sender()
+                    async def get_chat(self): return await self.orig_event.get_chat()
+                    
+                mock_event = MockEvent(event, f"[Пользователь нажал кнопку]: {action_text}")
+                
+                from tg.state import set_action
+                set_action("Обработка кнопки")
+                
+                response, pending_actions = None, None
+                text_buffer = ""
+                last_edit_time = 0
+                response_msg = None
+                
+                draft_id = (event.message_id * 1000 + int(time.time() * 10)) % 1000000000 + 2
+                
+                if ONLY_BOT_MODE:
+                    from tg.rich import send_rich_draft
+                    await send_rich_draft(mock_event.chat_id, draft_id, "<tg-thinking>Thinking...</tg-thinking>")
+                
+                async for chunk_type, chunk_data in generate_thought(mock_event):
+                    if chunk_type == "chunk":
+                        text_buffer += chunk_data
+                        now = time.time()
+                        if now - last_edit_time > 1.5 and text_buffer.strip():
+                            try:
+                                if ONLY_BOT_MODE:
+                                    await send_rich_draft(mock_event.chat_id, draft_id, text_buffer)
+                                else:
+                                    if not response_msg:
+                                        response_msg = await send_message(client, mock_event.chat_id, text_buffer + " ✍️", reply_to=event.message_id)
+                                    else:
+                                        if hasattr(client, 'edit_message'):
+                                            from tg.markdown import md_to_html
+                                            html_text = md_to_html(text_buffer + " ✍️")
+                                            await client.edit_message(mock_event.chat_id, response_msg.id, html_text, parse_mode="html")
+                                last_edit_time = now
+                            except Exception as e:
+                                logger.warning(f"Ошибка редактирования сообщения: {e}")
+                    elif chunk_type == "result":
+                        response, pending_actions = chunk_data
+                
+                if response:
+                    if ONLY_BOT_MODE:
+                        from tg.rich import send_rich_final
+                        rich_msg = await send_rich_final(mock_event.chat_id, response, reply_to=event.message_id)
+                        if not rich_msg:
+                            await send_message(client, mock_event.chat_id, response, reply_to=event.message_id)
+                    else:
+                        if response_msg and hasattr(client, 'edit_message'):
+                            from tg.markdown import md_to_html
+                            html_text = md_to_html(response)
+                            await client.edit_message(mock_event.chat_id, response_msg.id, html_text, parse_mode="html")
+                        else:
+                            await send_message(client, mock_event.chat_id, response, reply_to=event.message_id)
+
+                if pending_actions:
+                    await execute_pending_actions(client, mock_event, pending_actions)
+                    
+                set_action("Онлайн")
+                
+        except Exception as e:
+            logger.error(f"Callback error: {e}")
+
+    @client.on(events.InlineQuery)
+    async def inline_handler(event):
+        try:
+            from memory.users import is_allowed
+            if not is_allowed(event.sender_id):
+                return
+            query = event.text
+            if not query:
+                return
+                
+            from llm.provider import generate_response
+            
+            # Делаем короткий ответ для инлайна
+            prompt = f"Пользователь делает инлайн-запрос: '{query}'. Ответь коротко и по факту (макс 1 абзац)."
+            answer = await generate_response(prompt)
+            
+            builder = event.builder
+            await event.answer([
+                builder.article(
+                    title="Claw'd AI",
+                    text=answer,
+                    description=answer[:50] + "..."
+                )
+            ])
+        except Exception as e:
+            logger.error(f"InlineQuery error: {e}")

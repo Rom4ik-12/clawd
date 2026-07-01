@@ -69,6 +69,9 @@ _waiting_delete_trigger = {}
 _waiting_typing_seconds = {}
 _waiting_session_file = {}
 _waiting_faved_delete = {}
+_waiting_mem_import = {}
+_waiting_allow_chat = {}
+_waiting_block_chat = {}
 
 
 def setup_handlers(bot, main_client):
@@ -87,6 +90,7 @@ def setup_handlers(bot, main_client):
              Button.inline("История команд", b"shell_history")],
             [Button.inline("Память и Саммари", b"mem_menu"),
              Button.inline("База стикеров", b"sticker_menu")],
+            [Button.inline("Безопасность (Чаты и Логи)", b"sec_menu")],
             [Button.inline("Настройки", b"settings_menu")],
         ]
         return text, markup
@@ -111,6 +115,54 @@ def setup_handlers(bot, main_client):
             _clear_state(event.sender_id)
             text, markup = main_menu()
             await event.edit(text, buttons=markup)
+            await event.answer()
+
+        elif data == b"sec_menu":
+            _clear_state(event.sender_id)
+            text = (
+                "Безопасность: Чаты и Логи\n\n"
+                "Управляйте доступом бота к чатам (Whitelist / Blacklist) "
+                "и просматривайте журнал действий (Audit Log)."
+            )
+            markup = [
+                [Button.inline("Добавить чат в Whitelist", b"sec_allow_chat")],
+                [Button.inline("Добавить чат в Blacklist", b"sec_block_chat")],
+                [Button.inline("Скачать Audit Log (за 24ч)", b"sec_audit_log")],
+                [Button.inline("Назад в меню", b"main_menu")]
+            ]
+            await event.edit(text, buttons=markup)
+            await event.answer()
+
+        elif data == b"sec_allow_chat":
+            _clear_state(event.sender_id)
+            _waiting_allow_chat[event.sender_id] = True
+            await event.edit("Отправьте ID чата или username для добавления в Whitelist (Бот будет отвечать там всегда):", buttons=[[Button.inline("Отмена", b"sec_menu")]])
+            await event.answer()
+
+        elif data == b"sec_block_chat":
+            _clear_state(event.sender_id)
+            _waiting_block_chat[event.sender_id] = True
+            await event.edit("Отправьте ID чата или username для добавления в Blacklist (Бот будет игнорировать этот чат):", buttons=[[Button.inline("Отмена", b"sec_menu")]])
+            await event.answer()
+
+        elif data == b"sec_audit_log":
+            await event.answer("Формирую лог...")
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT activity_type, description, timestamp FROM activity_log WHERE timestamp >= datetime('now', '-1 day') ORDER BY id DESC")
+            rows = c.fetchall()
+            conn.close()
+            
+            if not rows:
+                await event.respond("Журнал аудита за последние 24 часа пуст.", buttons=[[Button.inline("Назад", b"sec_menu")]])
+            else:
+                log_text = "Журнал аудита (последние 24 часа):\n"
+                for r in rows:
+                    log_text += f"[{r[2]}] {r[0]}: {r[1]}\n"
+                
+                with open("/tmp/audit_log.txt", "w", encoding="utf-8") as f:
+                    f.write(log_text)
+                await bot.send_file(event.chat_id, "/tmp/audit_log.txt", caption="Журнал действий агента")
             await event.answer()
 
         elif data == b"sys_status":
@@ -156,9 +208,21 @@ def setup_handlers(bot, main_client):
                 [Button.inline("Очистить ВСЁ (сообщения + саммари)", b"mem_clear_all")],
                 [Button.inline("Удалить только сообщения", b"mem_clear_msgs")],
                 [Button.inline("Удалить только саммари", b"mem_clear_sums")],
+                [Button.inline("Экспорт БД (Бэкап)", b"mem_export"), Button.inline("Импорт БД (Восст.)", b"mem_import")],
                 [Button.inline("Назад в меню", b"main_menu")]
             ]
             await event.edit(text, buttons=markup)
+            await event.answer()
+            await event.answer()
+
+        elif data == b"mem_export":
+            await event.answer("Подготовка бэкапа...")
+            await bot.send_file(event.chat_id, DB_PATH, caption="Бэкап вашей базы данных памяти (SQLite).")
+            
+        elif data == b"mem_import":
+            _clear_state(event.sender_id)
+            _waiting_mem_import[event.sender_id] = True
+            await event.edit("Отправьте мне файл `memory.db` (базу SQLite) для восстановления базы данных.", buttons=[[Button.inline("Отмена", b"mem_menu")]])
             await event.answer()
 
         elif data == b"mem_view_msgs":
@@ -499,6 +563,35 @@ def setup_handlers(bot, main_client):
         if event.message.text and event.message.text.startswith('/'):
             return
 
+        if _waiting_allow_chat.get(event.sender_id):
+            chat_id_str = (event.message.text or "").strip()
+            _waiting_allow_chat.pop(event.sender_id, None)
+            try:
+                from memory.sqlite import set_chat_filter
+                # parse chat_id if possible
+                if chat_id_str.lstrip('-').isdigit():
+                    set_chat_filter(int(chat_id_str), True)
+                    await event.respond(f"Чат {chat_id_str} добавлен в Whitelist!", buttons=[[Button.inline("В меню безопасности", b"sec_menu")]])
+                else:
+                    await event.respond("Нужно отправить числовой ID чата (например, -100123456).", buttons=[[Button.inline("Попробовать снова", b"sec_allow_chat")]])
+            except Exception as e:
+                await event.respond(f"Ошибка: {e}", buttons=[[Button.inline("В меню безопасности", b"sec_menu")]])
+            return
+
+        if _waiting_block_chat.get(event.sender_id):
+            chat_id_str = (event.message.text or "").strip()
+            _waiting_block_chat.pop(event.sender_id, None)
+            try:
+                from memory.sqlite import set_chat_filter
+                if chat_id_str.lstrip('-').isdigit():
+                    set_chat_filter(int(chat_id_str), False)
+                    await event.respond(f"Чат {chat_id_str} добавлен в Blacklist!", buttons=[[Button.inline("В меню безопасности", b"sec_menu")]])
+                else:
+                    await event.respond("Нужно отправить числовой ID чата (например, -100123456).", buttons=[[Button.inline("Попробовать снова", b"sec_block_chat")]])
+            except Exception as e:
+                await event.respond(f"Ошибка: {e}", buttons=[[Button.inline("В меню безопасности", b"sec_menu")]])
+            return
+
         # Изменение имени
         if _waiting_name.get(event.sender_id):
             name_text = (event.message.text or "").strip()
@@ -632,6 +725,31 @@ def setup_handlers(bot, main_client):
             return
 
         # Загрузка .session файла
+        if _waiting_mem_import.get(event.sender_id):
+            _waiting_mem_import.pop(event.sender_id, None)
+            if not event.message.document:
+                await event.respond("Пожалуйста, отправьте файл базы данных (.db).", buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                return
+
+            file_name = getattr(event.message.document.attributes[0], 'file_name', '') if event.message.document.attributes else ''
+            if not file_name.endswith('.db') and not file_name.endswith('.sqlite'):
+                await event.respond("Ошибка: файл должен иметь расширение .db или .sqlite", buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+                return
+
+            await event.respond("Скачиваю базу данных памяти...")
+            try:
+                path = await event.message.download_media()
+                if not path or not os.path.exists(path):
+                    raise Exception("Не удалось скачать файл.")
+
+                import shutil
+                shutil.move(path, DB_PATH)
+                await event.respond("✅ База данных успешно импортирована!", buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+            except Exception as e:
+                logger.error(f"Error importing memory DB: {e}")
+                await event.respond(f"Ошибка при импорте базы данных: {e}", buttons=[[Button.inline("В меню памяти", b"mem_menu")]])
+            return
+
         if _waiting_session_file.get(event.sender_id):
             _waiting_session_file.pop(event.sender_id, None)
             if not event.message.document:
@@ -1057,6 +1175,9 @@ def _clear_state(user_id):
     _waiting_typing_seconds.pop(user_id, None)
     _waiting_session_file.pop(user_id, None)
     _waiting_faved_delete.pop(user_id, None)
+    _waiting_mem_import.pop(user_id, None)
+    _waiting_allow_chat.pop(user_id, None)
+    _waiting_block_chat.pop(user_id, None)
 
 
 def _set_env_value(key: str, value: str):

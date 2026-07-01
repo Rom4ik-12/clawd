@@ -191,6 +191,94 @@ async def generate_with_tools(messages: list, tools: list, temperature: float = 
     logger.error(f"[tools] All models failed. Last: {last_error}")
     raise RuntimeError(f"All models failed. Last error: {last_error}")
 
+async def stream_with_tools(messages: list, tools: list, temperature: float = 0.85):
+    """
+    Агентный вызов с function calling и стримингом текста.
+    Генерирует ('content', text_chunk) или ('tool_calls', [tool_call_objects])
+    """
+    from memory.sqlite import get_setting
+    import json
+    primary = get_setting("primary_model")
+    models = list(LLM_MODELS)
+    if primary:
+        models = [primary] + [m for m in models if m != primary]
+
+    last_error = None
+    for model in models:
+        try:
+            client, real_model = _get_client_and_model(model)
+            if _supports_tools(model):
+                response = await client.chat.completions.create(
+                    model=real_model,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    temperature=temperature,
+                    stream=True
+                )
+                
+                is_tool_call = False
+                tool_calls_dict = {}
+                
+                async for chunk in response:
+                    if not chunk.choices:
+                        continue
+                    delta = chunk.choices[0].delta
+                    
+                    if delta.tool_calls:
+                        is_tool_call = True
+                        for tc_chunk in delta.tool_calls:
+                            idx = tc_chunk.index
+                            if idx not in tool_calls_dict:
+                                tool_calls_dict[idx] = {
+                                    "id": tc_chunk.id or "",
+                                    "type": "function",
+                                    "function": {"name": tc_chunk.function.name or "", "arguments": ""}
+                                }
+                            if tc_chunk.function.arguments:
+                                tool_calls_dict[idx]["function"]["arguments"] += tc_chunk.function.arguments
+                    elif delta.content and not is_tool_call:
+                        yield ('content', delta.content)
+                        
+                if is_tool_call:
+                    class MockFunction:
+                        def __init__(self, name, arguments):
+                            self.name = name
+                            self.arguments = arguments
+                    class MockToolCall:
+                        def __init__(self, id, type, function):
+                            self.id = id
+                            self.type = type
+                            self.function = function
+                    
+                    final_calls = []
+                    for idx, tc in tool_calls_dict.items():
+                        final_calls.append(MockToolCall(
+                            id=tc["id"],
+                            type=tc["type"],
+                            function=MockFunction(tc["function"]["name"], tc["function"]["arguments"])
+                        ))
+                    yield ('tool_calls', final_calls)
+                return
+            else:
+                response = await client.chat.completions.create(
+                    model=real_model,
+                    messages=messages,
+                    temperature=temperature,
+                    stream=True
+                )
+                async for chunk in response:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        yield ('content', chunk.choices[0].delta.content)
+                return
+
+        except Exception as e:
+            logger.warning(f"[stream] Model {model} failed: {str(e)[:120]}")
+            last_error = e
+            await asyncio.sleep(0.3)
+
+    logger.error(f"[stream] All models failed. Last: {last_error}")
+    raise RuntimeError(f"All models failed. Last error: {last_error}")
 
 def _extract_transcription_text(response) -> str | None:
     """Извлекает текст из разных форматов ответа Whisper API."""

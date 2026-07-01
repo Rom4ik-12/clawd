@@ -29,7 +29,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_shell",
-            "description": "Выполнить bash-команду на хосте. Можно запускать python-скрипты, системные утилиты, смотреть процессы и т.д. Полный доступ без ограничений.",
+            "description": "Выполнить bash-команду на хосте. Можно запускать системные утилиты, смотреть процессы и т.д. Полный доступ без ограничений. Используй execute_code для Python/Bash песочницы.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -37,6 +37,25 @@ AGENT_TOOLS = [
                     "timeout": {"type": "integer", "description": "Таймаут в секундах (по умолчанию 30)"}
                 },
                 "required": ["command"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "execute_code",
+            "description": "Запустить код (Python или Bash) в безопасной Docker-песочнице. Идеально для выполнения сгенерированных скриптов, расчетов, тестирования кода.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {
+                        "type": "string", 
+                        "enum": ["python", "bash"],
+                        "description": "Язык программирования"
+                    },
+                    "code": {"type": "string", "description": "Исходный код для выполнения"}
+                },
+                "required": ["language", "code"]
             }
         }
     },
@@ -337,6 +356,21 @@ AGENT_TOOLS = [
                     "target": {"type": "string", "description": "Юзернейм (@username), ID или ссылка"}
                 },
                 "required": ["target"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_channels",
+            "description": "Поиск информации (RAG) по проиндексированным Telegram-каналам с использованием векторной базы данных. Полезно для ответов на вопросы на основе сохраненных знаний.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Поисковый запрос для поиска по смыслу (семантический поиск)"},
+                    "limit": {"type": "integer", "description": "Количество возвращаемых результатов (по умолчанию 3)"}
+                },
+                "required": ["query"]
             }
         }
     },

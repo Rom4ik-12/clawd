@@ -12,6 +12,8 @@ env/
 dist/
 build/
 database/memory.db
+*.sqlite
+*.sqlite-journal
 database/vector_db/
 database/cache/
 logs/
